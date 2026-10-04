@@ -1,0 +1,23 @@
+{
+  "name": "wled-usermod-spotify",
+  "version": "0.1.0-dev.1-r9",
+  "description": "Spotify Connect audio usermod for WLED on Waveshare ESP32-S3 RGB Matrix",
+  "keywords": [
+    "wled",
+    "spotify",
+    "audio",
+    "esp32",
+    "es8311",
+    "usermod"
+  ],
+  "frameworks": "arduino",
+  "platforms": "espressif32",
+  "build": {
+    "libArchive": false,
+    "srcDir": ".",
+    "srcFilter": [
+      "+<*.cpp>",
+      "+<audio/*.cpp>"
+    ]
+  }
+}
