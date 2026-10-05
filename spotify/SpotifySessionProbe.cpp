@@ -43,6 +43,7 @@ constexpr uint32_t SPIRC_LOAD = 0x14u;
 constexpr uint32_t SPIRC_PLAY = 0x15u;
 constexpr uint32_t SPIRC_PAUSE = 0x16u;
 constexpr const char* SPIRC_PROTOCOL_VERSION = "2.7.1";
+constexpr const char* TRACK_METADATA_PREFIX = "hm://metadata/3/track/";
 
 bool sha1Digest(const uint8_t* data, size_t size, uint8_t out[SHA1_BYTES]) {
   if (!out || (!data && size != 0u)) return false;
@@ -519,6 +520,140 @@ bool extractProtoVarint(const uint8_t* data, size_t size, uint32_t wantedField, 
   return false;
 }
 
+int32_t decodeZigZag32(uint64_t value) {
+  return static_cast<int32_t>((value >> 1u) ^ static_cast<uint64_t>(-static_cast<int64_t>(value & 1u)));
+}
+
+String bytesToHex(const uint8_t* data, size_t size) {
+  static constexpr char kHexDigits[] = "0123456789abcdef";
+  String out;
+  out.reserve(static_cast<unsigned int>(size * 2u));
+  for (size_t i = 0u; i < size; ++i) {
+    out += kHexDigits[(data[i] >> 4u) & 0x0fu];
+    out += kHexDigits[data[i] & 0x0fu];
+  }
+  return out;
+}
+
+struct LegacyTrackMetadataInfo {
+  String title;
+  String artists;
+  String album;
+  uint32_t durationMs = 0u;
+  uint32_t coverCount = 0u;
+  std::vector<uint8_t> coverId;
+  uint32_t audioFileCount = 0u;
+  int32_t preferredFormat = -1;
+  std::vector<uint8_t> preferredFileId;
+};
+
+bool parseLegacyAlbum(const uint8_t* data, size_t size, LegacyTrackMetadataInfo& info) {
+  size_t offset = 0u;
+  int bestCoverSize = -1;
+  while (offset < size) {
+    uint64_t key = 0u;
+    if (!readVarint(data, size, offset, key)) return false;
+    const uint32_t field = static_cast<uint32_t>(key >> 3u);
+    const uint8_t wire = static_cast<uint8_t>(key & 7u);
+    if (wire == 0u) {
+      uint64_t ignored = 0u;
+      if (!readVarint(data, size, offset, ignored)) return false;
+    } else if (wire == 1u) {
+      if (size - offset < 8u) return false;
+      offset += 8u;
+    } else if (wire == 2u) {
+      uint64_t len64 = 0u;
+      if (!readVarint(data, size, offset, len64) || len64 > size - offset) return false;
+      const size_t len = static_cast<size_t>(len64);
+      if (field == 2u) {
+        info.album = String();
+        info.album.reserve(static_cast<unsigned int>(len));
+        for (size_t i = 0u; i < len; ++i) info.album += static_cast<char>(data[offset + i]);
+      } else if (field == 9u) {
+        ++info.coverCount;
+        std::vector<uint8_t> fileId;
+        uint64_t imageSize = 0u;
+        extractLengthDelimited(data + offset, len, 1u, fileId);
+        extractProtoVarint(data + offset, len, 2u, imageSize);
+        if (!fileId.empty() && static_cast<int>(imageSize) >= bestCoverSize) {
+          bestCoverSize = static_cast<int>(imageSize);
+          info.coverId = fileId;
+        }
+      }
+      offset += len;
+    } else if (wire == 5u) {
+      if (size - offset < 4u) return false;
+      offset += 4u;
+    } else {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool parseLegacyTrackMetadata(const std::vector<uint8_t>& data, LegacyTrackMetadataInfo& info) {
+  size_t offset = 0u;
+  bool sawUsefulField = false;
+  while (offset < data.size()) {
+    uint64_t key = 0u;
+    if (!readVarint(data.data(), data.size(), offset, key)) return false;
+    const uint32_t field = static_cast<uint32_t>(key >> 3u);
+    const uint8_t wire = static_cast<uint8_t>(key & 7u);
+    if (wire == 0u) {
+      uint64_t value = 0u;
+      if (!readVarint(data.data(), data.size(), offset, value)) return false;
+      if (field == 7u) {
+        const int32_t decoded = decodeZigZag32(value);
+        info.durationMs = decoded > 0 ? static_cast<uint32_t>(decoded) : 0u;
+        sawUsefulField = true;
+      }
+    } else if (wire == 1u) {
+      if (data.size() - offset < 8u) return false;
+      offset += 8u;
+    } else if (wire == 2u) {
+      uint64_t len64 = 0u;
+      if (!readVarint(data.data(), data.size(), offset, len64) || len64 > data.size() - offset) return false;
+      const size_t len = static_cast<size_t>(len64);
+      const uint8_t* item = data.data() + offset;
+      if (field == 2u) {
+        info.title = String();
+        info.title.reserve(static_cast<unsigned int>(len));
+        for (size_t i = 0u; i < len; ++i) info.title += static_cast<char>(item[i]);
+        sawUsefulField = true;
+      } else if (field == 3u) {
+        if (!parseLegacyAlbum(item, len, info)) return false;
+      } else if (field == 4u) {
+        String artist;
+        if (extractProtoString(item, len, 2u, artist) && artist.length() != 0u) {
+          if (info.artists.length() != 0u) info.artists += F(", ");
+          if (info.artists.length() < 112u) info.artists += artist;
+          sawUsefulField = true;
+        }
+      } else if (field == 12u) {
+        ++info.audioFileCount;
+        std::vector<uint8_t> fileId;
+        uint64_t format = 0u;
+        extractLengthDelimited(item, len, 1u, fileId);
+        const bool hasFormat = extractProtoVarint(item, len, 2u, format);
+        if (!fileId.empty()) {
+          const bool prefer = info.preferredFileId.empty() || (hasFormat && format == 1u);
+          if (prefer) {
+            info.preferredFileId = fileId;
+            info.preferredFormat = hasFormat ? static_cast<int32_t>(format) : -1;
+          }
+        }
+      }
+      offset += len;
+    } else if (wire == 5u) {
+      if (data.size() - offset < 4u) return false;
+      offset += 4u;
+    } else {
+      return false;
+    }
+  }
+  return sawUsefulField && info.title.length() != 0u;
+}
+
 std::vector<uint8_t> buildSpircCapability(uint32_t type, int64_t intValue,
                                           const std::vector<String>& stringValues) {
   std::vector<uint8_t> out;
@@ -601,6 +736,9 @@ struct SpircFrameInfo {
   uint32_t playingTrackIndex = 0u;
   bool hasPlayingTrackIndex = false;
   uint32_t trackCount = 0u;
+  uint32_t selectedTrackIndex = 0u;
+  std::vector<uint8_t> selectedTrackGid;
+  String selectedTrackUri;
 };
 
 bool parseSpircFrame(const std::vector<uint8_t>& data, SpircFrameInfo& info) {
@@ -647,6 +785,9 @@ bool parseSpircFrame(const std::vector<uint8_t>& data, SpircFrameInfo& info) {
       info.hasPlayingTrackIndex = true;
     }
 
+    const uint32_t wantedTrack = info.hasPlayingTrackIndex ? info.playingTrackIndex : 0u;
+    std::vector<uint8_t> firstTrackGid;
+    String firstTrackUri;
     size_t offset = 0u;
     while (offset < state.size()) {
       uint64_t key = 0u;
@@ -660,16 +801,34 @@ bool parseSpircFrame(const std::vector<uint8_t>& data, SpircFrameInfo& info) {
         if (state.size() - offset < 8u) break;
         offset += 8u;
       } else if (wire == 2u) {
-        uint64_t len = 0u;
-        if (!readVarint(state.data(), state.size(), offset, len) || len > state.size() - offset) break;
-        if (field == 27u) ++info.trackCount;
-        offset += static_cast<size_t>(len);
+        uint64_t len64 = 0u;
+        if (!readVarint(state.data(), state.size(), offset, len64) || len64 > state.size() - offset) break;
+        const size_t len = static_cast<size_t>(len64);
+        if (field == 27u) {
+          std::vector<uint8_t> gid;
+          String uri;
+          extractLengthDelimited(state.data() + offset, len, 1u, gid);
+          extractProtoString(state.data() + offset, len, 2u, uri);
+          if (info.trackCount == 0u) { firstTrackGid = gid; firstTrackUri = uri; }
+          if (info.trackCount == wantedTrack) {
+            info.selectedTrackIndex = info.trackCount;
+            info.selectedTrackGid = gid;
+            info.selectedTrackUri = uri;
+          }
+          ++info.trackCount;
+        }
+        offset += len;
       } else if (wire == 5u) {
         if (state.size() - offset < 4u) break;
         offset += 4u;
       } else {
         break;
       }
+    }
+    if (info.selectedTrackGid.empty() && info.selectedTrackUri.length() == 0u && info.trackCount != 0u) {
+      info.selectedTrackIndex = 0u;
+      info.selectedTrackGid = firstTrackGid;
+      info.selectedTrackUri = firstTrackUri;
     }
   }
   return true;
@@ -734,7 +893,8 @@ std::vector<uint8_t> buildMercuryRequest(
 
 bool parseMercuryEnvelope(const std::vector<uint8_t>& data, uint64_t& sequence,
                           String& uri, String& method,
-                          std::vector<std::vector<uint8_t>>& payloadParts) {
+                          std::vector<std::vector<uint8_t>>& payloadParts,
+                          int32_t* statusCode = nullptr) {
   payloadParts.clear();
   if (data.size() < 7u) return false;
   const size_t sequenceBytes = readBe16At(data, 0u);
@@ -752,6 +912,10 @@ bool parseMercuryEnvelope(const std::vector<uint8_t>& data, uint64_t& sequence,
   const uint8_t* header = data.data() + offset;
   extractProtoString(header, headerSize, 1u, uri);
   extractProtoString(header, headerSize, 3u, method);
+  if (statusCode) {
+    uint64_t rawStatus = 0u;
+    *statusCode = extractProtoVarint(header, headerSize, 4u, rawStatus) ? decodeZigZag32(rawStatus) : 0;
+  }
   offset += headerSize;
   for (uint16_t part = 1u; part < partCount; ++part) {
     if (offset + 2u > data.size()) return false;
@@ -918,6 +1082,9 @@ bool SpotifySessionProbe::startNow(const String& userName, uint8_t authType,
   sessionConnectedMs_ = 0u;
   spircHelloMercurySequence_ = ~static_cast<uint64_t>(0);
   spircTransferNotifyMercurySequence_ = ~static_cast<uint64_t>(0);
+  metadataMercurySequence_ = ~static_cast<uint64_t>(0);
+  metadataLastStatus_ = 0;
+  metadataLastBytes_ = 0u;
   spircHelloBytes_ = 0u;
   lastRxMs_ = 0u;
   heapBefore_ = ESP.getFreeHeap();
@@ -1025,6 +1192,25 @@ void SpotifySessionProbe::reset() {
   memset(spircLastLoadContext_, 0, sizeof(spircLastLoadContext_));
   memset(spircRemoteIdent_, 0, sizeof(spircRemoteIdent_));
   memset(spircRemoteName_, 0, sizeof(spircRemoteName_));
+  metadataMercurySequence_ = ~static_cast<uint64_t>(0);
+  trackRefIndex_ = 0u;
+  memset(trackRefGidHex_, 0, sizeof(trackRefGidHex_));
+  memset(trackRefUri_, 0, sizeof(trackRefUri_));
+  metadataRequests_ = 0u;
+  metadataResponses_ = 0u;
+  metadataSuccesses_ = 0u;
+  metadataParseFailures_ = 0u;
+  metadataLastStatus_ = 0;
+  metadataLastBytes_ = 0u;
+  memset(metadataTitle_, 0, sizeof(metadataTitle_));
+  memset(metadataArtists_, 0, sizeof(metadataArtists_));
+  memset(metadataAlbum_, 0, sizeof(metadataAlbum_));
+  metadataDurationMs_ = 0u;
+  metadataCoverCount_ = 0u;
+  memset(metadataCoverIdHex_, 0, sizeof(metadataCoverIdHex_));
+  metadataAudioFileCount_ = 0u;
+  metadataPreferredFormat_ = -1;
+  memset(metadataPreferredFileIdHex_, 0, sizeof(metadataPreferredFileIdHex_));
   reconnectAttempts_ = 0u;
   reconnectSuccesses_ = 0u;
   lastDurationMs_ = 0u;
@@ -1273,6 +1459,7 @@ bool SpotifySessionProbe::runOneSession(bool reconnecting) {
   setError("none");
   spircLocalActive_ = false;
   spircTransferNotifyMercurySequence_ = ~static_cast<uint64_t>(0);
+  metadataMercurySequence_ = ~static_cast<uint64_t>(0);
   sessionConnectedMs_ = millis();
   lastRxMs_ = sessionConnectedMs_;
   updateStackWatermark();
@@ -1340,6 +1527,35 @@ bool SpotifySessionProbe::runOneSession(bool reconnecting) {
     spircLastLoadStatus_ = remote.hasPlayStatus ? remote.playStatus : 0u;
     strlcpy(spircLastLoadContext_, remote.contextUri.c_str(), sizeof(spircLastLoadContext_));
     state_ = State::SpircReady;
+    return true;
+  };
+
+  auto sendTrackMetadataRequest = [&](const SpircFrameInfo& remote) -> bool {
+    if (remote.selectedTrackGid.empty()) {
+      setError("SPIRC Load selected track has no GID");
+      return true; // activation remains valid; expose the metadata limitation diagnostically
+    }
+    const String gidHex = bytesToHex(remote.selectedTrackGid.data(), remote.selectedTrackGid.size());
+    if (gidHex.length() != 32u) {
+      setError("SPIRC Load selected track GID length unsupported");
+      return true;
+    }
+    if (metadataMercurySequence_ != ~static_cast<uint64_t>(0)) return true;
+    trackRefIndex_ = remote.selectedTrackIndex;
+    strlcpy(trackRefGidHex_, gidHex.c_str(), sizeof(trackRefGidHex_));
+    strlcpy(trackRefUri_, remote.selectedTrackUri.c_str(), sizeof(trackRefUri_));
+    const String metadataUri = String(TRACK_METADATA_PREFIX) + gidHex;
+    metadataMercurySequence_ = mercurySequence_++;
+    const std::vector<uint8_t> request = buildMercuryRequest(
+        metadataMercurySequence_, String(F("GET")), metadataUri);
+    ++metadataRequests_;
+    if (request.empty() ||
+        !sendShannonPacket(tcp, sendCipher, sendNonce, MERCURY_SEND_COMMAND, request, IO_TIMEOUT_MS)) {
+      metadataMercurySequence_ = ~static_cast<uint64_t>(0);
+      setError("track metadata Mercury GET failed");
+      return false;
+    }
+    ++txPackets_;
     return true;
   };
 
@@ -1431,7 +1647,8 @@ bool SpotifySessionProbe::runOneSession(bool reconnecting) {
       uint64_t sequence = 0u;
       String uri, method;
       std::vector<std::vector<uint8_t>> parts;
-      if (parseMercuryEnvelope(payload, sequence, uri, method, parts)) {
+      int32_t mercuryStatus = 0;
+      if (parseMercuryEnvelope(payload, sequence, uri, method, parts, &mercuryStatus)) {
         mercuryLastSequence_ = sequence;
         if (uri.length() != 0u) strlcpy(mercuryLastUri_, uri.c_str(), sizeof(mercuryLastUri_));
 
@@ -1471,6 +1688,9 @@ bool SpotifySessionProbe::runOneSession(bool reconnecting) {
                 if (!self && !sendSpircTransferNotify(info)) {
                   tcp.stop(); state_ = State::Failed; return false;
                 }
+                if (!self && !sendTrackMetadataRequest(info)) {
+                  tcp.stop(); state_ = State::Failed; return false;
+                }
               } else if (info.type == SPIRC_PLAY) {
                 ++spircPlayFrames_;
               } else if (info.type == SPIRC_PAUSE) {
@@ -1495,6 +1715,40 @@ bool SpotifySessionProbe::runOneSession(bool reconnecting) {
           if (liveCommand == MERCURY_SEND_COMMAND &&
               sequence == spircTransferNotifyMercurySequence_) {
             ++spircTransferNotifyAcks_;
+            state_ = State::SpircReady;
+          }
+          if (liveCommand == MERCURY_SEND_COMMAND &&
+              sequence == metadataMercurySequence_) {
+            ++metadataResponses_;
+            metadataLastStatus_ = mercuryStatus;
+            metadataLastBytes_ = parts.empty() ? 0u : parts.front().size();
+            if (mercuryStatus == 200 && !parts.empty()) {
+              LegacyTrackMetadataInfo metadata;
+              if (parseLegacyTrackMetadata(parts.front(), metadata)) {
+                ++metadataSuccesses_;
+                strlcpy(metadataTitle_, metadata.title.c_str(), sizeof(metadataTitle_));
+                strlcpy(metadataArtists_, metadata.artists.c_str(), sizeof(metadataArtists_));
+                strlcpy(metadataAlbum_, metadata.album.c_str(), sizeof(metadataAlbum_));
+                metadataDurationMs_ = metadata.durationMs;
+                metadataCoverCount_ = metadata.coverCount;
+                const String coverHex = metadata.coverId.empty() ? String() :
+                    bytesToHex(metadata.coverId.data(), metadata.coverId.size());
+                strlcpy(metadataCoverIdHex_, coverHex.c_str(), sizeof(metadataCoverIdHex_));
+                metadataAudioFileCount_ = metadata.audioFileCount;
+                metadataPreferredFormat_ = metadata.preferredFormat;
+                const String audioHex = metadata.preferredFileId.empty() ? String() :
+                    bytesToHex(metadata.preferredFileId.data(), metadata.preferredFileId.size());
+                strlcpy(metadataPreferredFileIdHex_, audioHex.c_str(), sizeof(metadataPreferredFileIdHex_));
+                setError("none");
+              } else {
+                ++metadataParseFailures_;
+                setError("track metadata protobuf parse failed");
+              }
+            } else {
+              ++metadataParseFailures_;
+              setError("track metadata Mercury response not 200");
+            }
+            metadataMercurySequence_ = ~static_cast<uint64_t>(0);
             state_ = State::SpircReady;
           }
         }

@@ -15,14 +15,11 @@ required = [
 ]
 for marker in required:
     assert marker in s or marker in h, marker
-assert "Spotify SPIRC transfer-ack gate" in u
-assert "scope=SPIRC Load -> active Notify transfer ack; metadata/audio acquisition next gate" in u
 assert "SPIRC hello attempts=" in u and "SPIRC rx=" in u and "SPIRC remote ident=" in u
 assert "SPIRC transfer Notify attempts=" in u and "SPIRC Load tracks=" in u
 assert "sendSpircTransferNotify(info)" in s
 assert "spircLocalActive_ = true" in s
 assert "appendVarintField(state, 5u, 1u)" in s
-assert "metadata/3/track" not in s
 assert "get_audio_key" not in s
 assert "storage-resolve" not in s
 assert "Vorbis" not in s

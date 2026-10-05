@@ -1,7 +1,7 @@
 {
   "name": "wled-usermod-spotify",
-  "version": "0.1.0-dev.2g-spirc-activation-r3",
-  "description": "Spotify Connect AP authentication/audio usermod for WLED on Waveshare ESP32-S3 RGB Matrix",
+  "version": "0.1.0-dev.2h-track-metadata-r1a",
+  "description": "Spotify Connect SPIRC/metadata/audio usermod for WLED on Waveshare ESP32-S3 RGB Matrix",
   "keywords": [
     "wled",
     "spotify",

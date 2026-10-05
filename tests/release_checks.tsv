@@ -8,8 +8,8 @@ LIB_ARCHIVE	prebuild	required	file_contains	library.json	"libArchive": false	Pla
 LIB_SRCDIR	prebuild	required	file_contains	library.json	"srcDir": "."	library source root is repository root
 LIB_AUDIO	prebuild	required	file_contains	library.json	+<audio/*.cpp>	audio translation units are included
 LIB_SPOTIFY	prebuild	required	file_contains	library.json	+<spotify/*.cpp>	Spotify translation units are included
-BUILD_LINE	prebuild	required	file_contains	usermod_spotify_connect.h	USERMOD_VERSION = "0.1.0-dev.2g-spirc-activation"	functional development line is dev.2g SPIRC activation
-BUILD_REV	prebuild	required	file_contains	usermod_spotify_connect.h	USERMOD_REVISION = "r3"	revision marker is r3
+BUILD_LINE	prebuild	required	file_contains	usermod_spotify_connect.h	USERMOD_VERSION = "0.1.0-dev.2h-track-metadata"	functional development line is dev.2h track metadata
+BUILD_REV	prebuild	required	file_contains	usermod_spotify_connect.h	USERMOD_REVISION = "r1a"	revision marker is r1a
 ZEROCONF_GATE	prebuild	required	tree_contains	.	spotify-connect	Spotify mDNS discovery service is retained
 AUDIO_POLICY	prebuild	required	tree_contains	.	policy=shared 32-bit slave when owned+clocked	qualified 32-bit shared-I2S policy is retained
 PCM_INGRESS	prebuild	required	tree_contains	.	enqueuePcm44100	cspot-facing 44.1 kHz PCM ingress is present
@@ -60,7 +60,7 @@ SESSION_LOGIN_CMD	prebuild	required	file_contains	spotify/SpotifySessionProbe.cp
 SESSION_WELCOME_CMD	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp	AUTH_SUCCESSFUL_COMMAND = 0xACu	Spotify APWelcome command 0xAC is present
 SESSION_DECLINE_CMD	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp	AUTH_DECLINED_COMMAND = 0xADu	Spotify APLoginFailed command 0xAD is present
 SESSION_CREDENTIAL_GETTERS	prebuild	required	file_contains	spotify/SpotifyZeroConfProbe.h	const std::vector<uint8_t>& authData() const	qualified cached credential is exposed only to the AP session gate
-SESSION_SCOPE	prebuild	required	file_contains	usermod_spotify_connect.h	scope=SPIRC Load -> active Notify transfer ack; metadata/audio acquisition next gate	scope is limited to SPIRC transfer acknowledgement
+SESSION_SCOPE	prebuild	required	file_contains	usermod_spotify_connect.h	scope=SPIRC Load -> TrackRef -> Mercury track metadata; audio-key/CDN/decode next gate	scope is limited to metadata acquisition
 THIRD_PARTY_CSPOT	prebuild	required	file_contains	THIRD_PARTY_NOTICES.md	GPL-3.0-or-later	cspot licensing note is accurate and does not repeat the earlier MIT assumption
 THIRD_PARTY_SHANNON	prebuild	required	file_contains	THIRD_PARTY_NOTICES.md	independent C++ implementation	Shannon implementation provenance is documented
 SESSION_PERSIST_CONTRACT	prebuild	required	python_script	tests/test_dev2f_session_contract.py	exit=0	persistent Shannon/Mercury protocol contract passes
@@ -74,25 +74,37 @@ SPIRC_HELLO	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp	SPIR
 SPIRC_MERCURY_SEND	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp	MERCURY_SEND_COMMAND = 0xB2u	SPIRC Hello is transported by Mercury SEND
 SPIRC_DEVICE_STATE	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp	buildSpircDeviceState	SPIRC Hello advertises device state and capabilities
 SPIRC_REMOTE_PARSE	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp	parseSpircFrame	incoming SPIRC control frames are decoded
-NO_TRACK_METADATA	prebuild	required	file_not_contains	spotify/SpotifySessionProbe.cpp	hm://metadata/3/track/	track metadata retrieval remains outside this gate
 SPIRC_TRANSFER_NOTIFY	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp	buildSpircTransferNotify	Load transfer acknowledgement builds an active SPIRC Notify
 SPIRC_LOAD_ACK	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp	sendSpircTransferNotify(info)	remote Load triggers SPIRC transfer Notify
 SPIRC_LOCAL_ACTIVE	prebuild	required	file_contains	usermod_spotify_connect.h	SPIRC transfer Notify attempts=	transfer acknowledgement telemetry is exposed
+TRACKREF_SELECTED	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp	selectedTrackGid	SPIRC Load selected TrackRef GID is extracted
+TRACK_METADATA_URI	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp	hm://metadata/3/track/	legacy Mercury track metadata endpoint is present
+TRACK_METADATA_GET	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp	String(F("GET"))	track metadata is requested through Mercury GET
+TRACK_METADATA_PARSE	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp	parseLegacyTrackMetadata	spotify.metadata.Track parser is present
+TRACK_METADATA_TELEMETRY	prebuild	required	file_contains	usermod_spotify_connect.h	Metadata GET attempts=	metadata request/response telemetry is exposed
+TRACK_METADATA_FIELDS	prebuild	required	file_contains	usermod_spotify_connect.h	Track title=	title/artist metadata telemetry is exposed
+NO_AUDIO_KEY_FETCH	prebuild	required	file_not_contains	spotify/SpotifySessionProbe.cpp	hm://keymaster/	audio-key acquisition remains outside this gate
+NO_STORAGE_RESOLVE	prebuild	required	file_not_contains	spotify/SpotifySessionProbe.cpp	storage-resolve	CDN/storage resolution remains outside this gate
+METADATA_CONTRACT	prebuild	required	python_script	tests/test_dev2h_metadata_contract.py	exit=0	TrackRef/Mercury metadata contract passes
+HEX_LOOKUP_NAME	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp	kHexDigits	hex lookup avoids Arduino Print.h HEX macro collision
+NO_HEX_MACRO_COLLISION	prebuild	required	file_not_contains	spotify/SpotifySessionProbe.cpp	static const char* HEX	Arduino HEX macro collision is absent
 STATIC_PY	prebuild	required	python_script	tests/test_static.py	exit=0	static source regression suite passes including SPIRC activation integration
 SPIRC_URI_PREFIX	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp	uri.startsWith(subscriptionUri)	SPIRC descendant remote-user URIs are dispatched
 SESSION_RX_DIAG	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp	readFailStage	Shannon live-read failure stage is diagnosed
 SESSION_RX_CAP	prebuild	required	file_contains	spotify/SpotifySessionProbe.h	MAX_AP_ENCRYPTED_PACKET = 16384u	live Shannon payload cap is raised to 16 KiB
 FW_SHANNON	postbuild	required	firmware_contains	firmware	Shannon keys tx=	firmware contains Shannon session diagnostics
 FW_AP_AUTH	postbuild	required	firmware_contains	firmware	AP auth attempts=	firmware contains AP authentication diagnostics
-FW_VERSION	postbuild	required	firmware_contains	firmware	0.1.0-dev.2g-spirc-activation	firmware contains dev.2g SPIRC activation marker
-FW_REVISION	postbuild	required	firmware_contains	firmware	r3	firmware contains revision marker
-FW_ZEROCONF	postbuild	required	firmware_contains	firmware	Spotify SPIRC transfer-ack gate	firmware contains SPIRC transfer-ack gate marker
+FW_VERSION	postbuild	required	firmware_contains	firmware	0.1.0-dev.2h-track-metadata	firmware contains dev.2h track metadata marker
+FW_REVISION	postbuild	required	firmware_contains	firmware	r1a	firmware contains revision marker
+FW_ZEROCONF	postbuild	required	firmware_contains	firmware	Spotify track metadata gate	firmware contains track metadata gate marker
 FW_AUDIO_POLICY	postbuild	required	firmware_contains	firmware	policy=shared 32-bit slave when owned+clocked	firmware contains qualified shared-I2S policy
 FW_PCM_INGRESS	postbuild	required	firmware_contains	firmware	PCM ingress 44100->	firmware contains PCM ingress diagnostics
 FW_LOGINBLOB	postbuild	required	firmware_contains	firmware	LoginBlob attempts=	firmware contains LoginBlob diagnostics
-FW_SESSION	postbuild	required	firmware_contains	firmware	scope=SPIRC Load -> active Notify transfer ack; metadata/audio acquisition next gate	firmware contains dev.2g transfer-ack scope marker
+FW_SESSION	postbuild	required	firmware_contains	firmware	scope=SPIRC Load -> TrackRef -> Mercury track metadata; audio-key/CDN/decode next gate	firmware contains dev.2h metadata scope marker
 FW_KEEPALIVE	postbuild	required	firmware_contains	firmware	keepalive ping=	firmware contains persistent keepalive diagnostics
 FW_MERCURY	postbuild	required	firmware_contains	firmware	Mercury SUB attempts=	firmware contains Mercury diagnostics
 FW_SPIRC	postbuild	required	firmware_contains	firmware	SPIRC hello attempts=	firmware contains SPIRC activation diagnostics
+FW_TRACKREF	postbuild	required	firmware_contains	firmware	TrackRef index=	firmware contains selected track reference diagnostics
+FW_METADATA	postbuild	required	firmware_contains	firmware	Metadata GET attempts=	firmware contains track metadata diagnostics
 FW_NO_OLD_AR_BLOCK	postbuild	required	firmware_not_contains	firmware	blocked: AudioReactive owns shared I2S clocks	firmware does not contain obsolete AudioReactive blocker
 FW_NO_OLD_LRCK_BLOCK	postbuild	required	firmware_not_contains	firmware	blocked: shared LRCK active (AudioReactive/I2S0)	firmware does not contain obsolete LRCK blocker

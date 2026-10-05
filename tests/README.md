@@ -28,3 +28,8 @@ expectations have one authoritative location.
 
 ### dev.2f-r1 / dev.2g-r1
 `test_dev2f_session_contract.py` retains the persistent Shannon keepalive and Mercury envelope/subscription regression. `test_dev2g_spirc_contract.py` adds the independent SPIRC field-number, Mercury SEND multipart-envelope, Hello and remote-frame-decode contract. Real device activation/Load remains an explicit hardware gate in `hardware_checks.tsv`.
+
+
+### dev.2h-r1
+
+`test_dev2h_metadata_contract.py` guards selected TrackRef extraction, `hm://metadata/3/track/<gid>` Mercury GET, legacy track/album/artist/cover/audio-file parsing, metadata telemetry, and the explicit absence of audio-key/CDN/decode work from this gate.

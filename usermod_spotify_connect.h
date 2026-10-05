@@ -9,8 +9,8 @@
 
 class UsermodSpotifyConnect : public Usermod {
 private:
-  static constexpr const char* USERMOD_VERSION = "0.1.0-dev.2g-spirc-activation";
-  static constexpr const char* USERMOD_REVISION = "r3";
+  static constexpr const char* USERMOD_VERSION = "0.1.0-dev.2h-track-metadata";
+  static constexpr const char* USERMOD_REVISION = "r1a";
   bool enabled_ = false;
   bool ready_ = false;
   bool initPending_ = false;
@@ -81,7 +81,7 @@ public:
           request->send(409, FPSTR(CONTENT_TYPE_PLAIN), String(F("Spotify session not started: state=")) + sessionProbe_.stateName() + F(" error=") + sessionProbe_.lastError());
           return;
         }
-        request->send(202, FPSTR(CONTENT_TYPE_PLAIN), F("Spotify persistent AP/Mercury/SPIRC activation session started; inspect /json/info"));
+        request->send(202, FPSTR(CONTENT_TYPE_PLAIN), F("Spotify AP/Mercury/SPIRC/metadata session started; inspect /json/info"));
         return;
       }
       if (action == "stop") {
@@ -159,7 +159,7 @@ public:
     if (!enabled_) s.add(F("disabled"));
     else if (!ready_ && selectClockMode() == ClockMode::WaitingSharedClock) s.add(F("waiting: AudioReactive owns clocks but LRCK inactive"));
     else if (!ready_) s.add(String(F("audio not ready: "))+audio_.lastError());
-    else s.add(F("audio ready | Spotify SPIRC transfer-ack gate"));
+    else s.add(F("audio ready | Spotify track metadata gate"));
 
     JsonArray z=user.createNestedArray(F("Spotify Zeroconf"));
     z.add(String(F("state=")) + zeroConf_.stateName() + F(" | cpath=") + zeroConf_.cpath());
@@ -228,12 +228,28 @@ public:
           F(" position=") + sessionProbe_.spircLastLoadPositionMs() + F(" remoteStatus=") +
           sessionProbe_.spircLastLoadStatus() + F(" context=") +
           (sessionProbe_.spircLastLoadContext()[0] ? sessionProbe_.spircLastLoadContext() : "none"));
+    n.add(String(F("TrackRef index=")) + sessionProbe_.trackRefIndex() + F(" gid=") +
+          (sessionProbe_.trackRefGidHex()[0] ? sessionProbe_.trackRefGidHex() : "none") + F(" uri=") +
+          (sessionProbe_.trackRefUri()[0] ? sessionProbe_.trackRefUri() : "none"));
+    n.add(String(F("Metadata GET attempts=")) + sessionProbe_.metadataRequests() + F(" responses=") +
+          sessionProbe_.metadataResponses() + F(" ok=") + sessionProbe_.metadataSuccesses() +
+          F(" parseFail=") + sessionProbe_.metadataParseFailures() + F(" status=") +
+          sessionProbe_.metadataLastStatus() + F(" bytes=") + sessionProbe_.metadataLastBytes());
+    n.add(String(F("Track title=")) + (sessionProbe_.metadataTitle()[0] ? sessionProbe_.metadataTitle() : "none") +
+          F(" artist=") + (sessionProbe_.metadataArtists()[0] ? sessionProbe_.metadataArtists() : "none"));
+    n.add(String(F("Track album=")) + (sessionProbe_.metadataAlbum()[0] ? sessionProbe_.metadataAlbum() : "none") +
+          F(" duration=") + sessionProbe_.metadataDurationMs() + F("ms covers=") +
+          sessionProbe_.metadataCoverCount() + F(" coverId=") +
+          (sessionProbe_.metadataCoverIdHex()[0] ? sessionProbe_.metadataCoverIdHex() : "none"));
+    n.add(String(F("Track audioFiles=")) + sessionProbe_.metadataAudioFileCount() + F(" preferredFormat=") +
+          sessionProbe_.metadataPreferredFormat() + F(" fileId=") +
+          (sessionProbe_.metadataPreferredFileIdHex()[0] ? sessionProbe_.metadataPreferredFileIdHex() : "none"));
     n.add(String(F("SPIRC remote ident=")) + (sessionProbe_.spircRemoteIdent()[0] ? sessionProbe_.spircRemoteIdent() : "none") +
           F(" name=") + (sessionProbe_.spircRemoteName()[0] ? sessionProbe_.spircRemoteName() : "none"));
     n.add(String(F("AP task attempts=")) + sessionProbe_.attempts() +
           F(" heap=") + sessionProbe_.heapBefore() + F("->") + sessionProbe_.heapAfter() +
           F(" minHeap=") + sessionProbe_.minHeapSeen() + F(" stackMin=") + sessionProbe_.stackMinFree());
-    n.add(F("scope=SPIRC Load -> active Notify transfer ack; metadata/audio acquisition next gate"));
+    n.add(F("scope=SPIRC Load -> TrackRef -> Mercury track metadata; audio-key/CDN/decode next gate"));
 
     JsonArray a=user.createNestedArray(F("Spotify audio"));
     const auto t=audio_.telemetry();

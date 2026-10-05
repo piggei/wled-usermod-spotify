@@ -35,3 +35,8 @@ requires otherwise.
 
 The next qualified step after dev.2f is now the SPIRC activation gate. dev.2g-r3 now builds on the qualified r2 descendant-URI decoder. It sends a minimal Hello/device-state frame over Mercury, decodes incoming Notify/Load/Play/Pause frames, and acknowledges a remote Load by marking the local SPIRC state active and sending kMessageTypeNotify with the transferred context/position. Track metadata, audio-key/CDN resolution and real
 Spotify media playback remain later gates and must not be folded into dev.2g.
+
+
+## dev.2h update
+
+dev.2g-r3 is now hardware-qualified through actual Spotify device connection and transfer acknowledgement. dev.2h-r1a adds only selected TrackRef extraction and Mercury track metadata retrieval/parsing. Audio-key/CDN/decode/playback remains the next independent gate after metadata is hardware-qualified.

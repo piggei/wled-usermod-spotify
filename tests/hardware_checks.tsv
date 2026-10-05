@@ -36,11 +36,16 @@ LOGINBLOB_REPEAT_NO_WRITE	json	While session is running select WLED Matrix again
 AUDIO_AFTER_MERCURY	manual	After persistent session/Mercury PASS run /spotify-test?action=start-pcm&tone=1000 for 30 seconds then stop	Qualified PCM tone remains clean; I2S err=0 short=0 late=0 ringUnderrun=0	PENDING	Regression guard after persistent network activity
 SPIRC_HELLO_SEND	json	Boot dev.2g-r2 with cached credential; wait for session, then read /json/info	SPIRC hello attempts=1 sent=1, bytes>0; Shannon macFail=0; lastError=none	PASS	dev.2g-r1 observed Hello sent repeatedly; r2 retains behavior
 SPIRC_HELLO_ACK	json	Read /json/info after the Mercury SEND response	SPIRC hello ack>=1 and state=spirc-ready, or an incoming SPIRC event proves the SEND was accepted	PASS	dev.2g-r1 observed ack>=1; r2 retains behavior
-SPIRC_SELECT_DEVICE	manual	Select WLED Matrix in the official Spotify app and wait up to 15 seconds	The app progresses beyond endless connecting; WLED stays responsive	PENDING	dev.2g-r2 descendant URI dispatch gate
-SPIRC_REMOTE_FRAME	json	After selecting WLED Matrix read /json/info	SPIRC rx>=1 and remote>=1 or selfEcho>=1; lastType is non-zero; macFail remains 0	PENDING	dev.2g-r2 must decode root or child remote/3 event URI
-SPIRC_LOAD	json	Start or transfer a track to WLED Matrix, then read /json/info	SPIRC load>=1 (type 0x14) is observed; no metadata/audio fetch is attempted in this gate	PENDING	dev.2g-r2 transfer-intent gate
+SPIRC_SELECT_DEVICE	manual	Select WLED Matrix in the official Spotify app and wait up to 15 seconds	The app progresses beyond endless connecting; WLED stays responsive	PASS	Qualified on dev.2g-r3: official Spotify app completed device connection
+SPIRC_REMOTE_FRAME	json	After selecting WLED Matrix read /json/info	SPIRC rx>=1 and remote>=1 or selfEcho>=1; lastType is non-zero; macFail remains 0	PASS	Qualified on dev.2g-r3: rx=5 remote=5 macFail=0
+SPIRC_LOAD	json	Start or transfer a track to WLED Matrix, then read /json/info	SPIRC load>=1 (type 0x14) is observed and transfer Notify is acknowledged	PASS	Qualified on dev.2g-r3: load=1, transfer Notify sent=1 ack=1 localActive=yes
 AUDIO_AFTER_SPIRC	manual	After SPIRC gate test run /spotify-test?action=start-pcm&tone=1000 for 30 seconds then stop	Qualified PCM tone remains clean; I2S err=0 short=0 late=0 ringUnderrun=0	PENDING	Regression guard after SPIRC network activity
 
-DEV2G_R2_SPIRC_CHILD_LOAD	PASS	dev.2g-r2	SPIRC descendant URI dispatch decodes remote controller frames; observed root=0 child=6 rx=6 notify=4 load=2, lastType=0x14
-DEV2G_R2_SESSION_STABLE	PASS	dev.2g-r2	AP/Shannon/Mercury/SPIRC session remains stable through controller interaction with reconnect attempts=0 and macFail=0
-DEV2G_R3_TRANSFER_NOTIFY	PENDING	dev.2g-r3	Remote Load triggers local active SPIRC Notify, Mercury SEND acknowledgement, and Spotify app completes device activation
+DEV2G_R2_SPIRC_CHILD_LOAD	json	Read /json/info after remote Load on dev.2g-r2	Descendant remote-user URI is decoded; SPIRC rx/load become non-zero	PASS	Observed root=0 child=6 rx=6 notify=4 load=2 lastType=0x14
+DEV2G_R2_SESSION_STABLE	json	Interact with controller while dev.2g-r2 session remains live	No AP reconnect and Shannon macFail=0	PASS	Observed reconnect attempts=0 and macFail=0
+DEV2G_R3_TRANSFER_NOTIFY	manual	Transfer playback to WLED Matrix on dev.2g-r3	Remote Load triggers active Notify, Mercury ACK, and official app completes connection	PASS	Observed load=1, Notify sent=1 ack=1 localActive=yes; Spotify connected
+
+DEV2H_TRACKREF	json	Transfer a normal music track to dev.2h-r1 and read /json/info	TrackRef reports selected index, 32-hex GID and spotify:track URI	PENDING	First dev.2h hardware gate
+DEV2H_METADATA_GET	json	Read /json/info after the transferred Load is processed	Metadata GET attempts>=1 responses>=1 status=200 ok>=1 parseFail=0	PENDING	Verifies legacy Mercury metadata endpoint on current service
+DEV2H_METADATA_FIELDS	json	Inspect decoded metadata for the transferred track	Title artist album and duration are non-empty/plausible; cover/audio inventory is reported when present	PENDING	No media download in this gate
+DEV2H_SESSION_STABLE	json	Keep session active after metadata response and inspect /json/info	Reconnect remains 0, Shannon macFail=0, WLED responsive and audio diagnostics healthy	PENDING	Regression guard after metadata request

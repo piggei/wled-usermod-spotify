@@ -5,14 +5,14 @@
 #include <freertos/task.h>
 #include <vector>
 
-// dev.2g-r3 SPIRC transfer-ack diagnostics gate.
+// dev.2h-r1a track metadata acquisition diagnostics gate.
 //
-// Qualified dev.2f persistent AP/Shannon + Mercury session behavior is retained.
-// After the remote-user Mercury subscription is acknowledged, this gate sends an
-// independently encoded SPIRC Hello/device-state frame and decodes incoming SPIRC
-// control frames far enough to observe activation/Load/Play/Pause. It deliberately
-// does not fetch metadata, audio keys, CDN data, decode tracks, or feed Spotify
-// audio into the already-qualified PCM backend.
+// Qualified dev.2g SPIRC transfer activation behavior is retained. After an
+// accepted remote Load, this gate extracts the selected TrackRef (GID/URI), issues
+// the legacy Mercury track metadata GET used by librespot-compatible clients, and
+// decodes enough of spotify.metadata.Track to expose title/artist/album/duration,
+// cover id and audio-file inventory. It deliberately does not request audio keys,
+// resolve CDN storage, decode tracks, or feed Spotify audio into the PCM backend.
 class SpotifySessionProbe {
 public:
   enum class State : uint8_t {
@@ -133,6 +133,25 @@ public:
   const char* spircLastLoadContext() const { return spircLastLoadContext_; }
   const char* spircRemoteIdent() const { return spircRemoteIdent_; }
   const char* spircRemoteName() const { return spircRemoteName_; }
+
+  uint32_t trackRefIndex() const { return trackRefIndex_; }
+  const char* trackRefGidHex() const { return trackRefGidHex_; }
+  const char* trackRefUri() const { return trackRefUri_; }
+  uint32_t metadataRequests() const { return metadataRequests_; }
+  uint32_t metadataResponses() const { return metadataResponses_; }
+  uint32_t metadataSuccesses() const { return metadataSuccesses_; }
+  uint32_t metadataParseFailures() const { return metadataParseFailures_; }
+  int32_t metadataLastStatus() const { return metadataLastStatus_; }
+  size_t metadataLastBytes() const { return metadataLastBytes_; }
+  const char* metadataTitle() const { return metadataTitle_; }
+  const char* metadataArtists() const { return metadataArtists_; }
+  const char* metadataAlbum() const { return metadataAlbum_; }
+  uint32_t metadataDurationMs() const { return metadataDurationMs_; }
+  uint32_t metadataCoverCount() const { return metadataCoverCount_; }
+  const char* metadataCoverIdHex() const { return metadataCoverIdHex_; }
+  uint32_t metadataAudioFileCount() const { return metadataAudioFileCount_; }
+  int32_t metadataPreferredFormat() const { return metadataPreferredFormat_; }
+  const char* metadataPreferredFileIdHex() const { return metadataPreferredFileIdHex_; }
 
   uint32_t reconnectAttempts() const { return reconnectAttempts_; }
   uint32_t reconnectSuccesses() const { return reconnectSuccesses_; }
@@ -260,6 +279,26 @@ private:
   char spircLastLoadContext_[96] = {0};
   char spircRemoteIdent_[48] = {0};
   char spircRemoteName_[33] = {0};
+
+  uint64_t metadataMercurySequence_ = ~static_cast<uint64_t>(0);
+  uint32_t trackRefIndex_ = 0u;
+  char trackRefGidHex_[33] = {0};
+  char trackRefUri_[96] = {0};
+  uint32_t metadataRequests_ = 0u;
+  uint32_t metadataResponses_ = 0u;
+  uint32_t metadataSuccesses_ = 0u;
+  uint32_t metadataParseFailures_ = 0u;
+  int32_t metadataLastStatus_ = 0;
+  size_t metadataLastBytes_ = 0u;
+  char metadataTitle_[96] = {0};
+  char metadataArtists_[128] = {0};
+  char metadataAlbum_[96] = {0};
+  uint32_t metadataDurationMs_ = 0u;
+  uint32_t metadataCoverCount_ = 0u;
+  char metadataCoverIdHex_[41] = {0};
+  uint32_t metadataAudioFileCount_ = 0u;
+  int32_t metadataPreferredFormat_ = -1;
+  char metadataPreferredFileIdHex_[41] = {0};
 
   uint32_t reconnectAttempts_ = 0u;
   uint32_t reconnectSuccesses_ = 0u;
