@@ -53,7 +53,7 @@ done
 
 if [[ "$PHASE" == "postbuild" ]]; then
   [[ -n "$FIRMWARE" && -f "$FIRMWARE" ]] || { echo "ERROR: --firmware FILE is required for postbuild" >&2; exit 2; }
-  command -v strings >/dev/null 2>&1 || { echo "ERROR: strings not found (install binutils)" >&2; exit 2; }
+  command -v grep >/dev/null 2>&1 || { echo "ERROR: grep not found" >&2; exit 2; }
 fi
 
 pass=0
@@ -85,10 +85,22 @@ run_check() {
       ! grep -R -I -Fq --exclude-dir=.git --exclude-dir=build --exclude="$(basename "$MANIFEST")" -- "$expected" "$REPO"
       ;;
     firmware_contains)
-      strings "$FIRMWARE" | grep -Fq -- "$expected"
+      # Search raw bytes directly. The previous `strings | grep -q` form produced
+      # false negatives under `set -o pipefail`: once grep found a match and quit,
+      # strings received SIGPIPE and made the pipeline look failed. Prefer ELF,
+      # because it retains diagnostic literals more reliably, then fall back to BIN.
+      local elf="${FIRMWARE%/*}/firmware.elf"
+      if [[ -f "$elf" ]] && LC_ALL=C grep -aFq -- "$expected" "$elf"; then
+        return 0
+      fi
+      LC_ALL=C grep -aFq -- "$expected" "$FIRMWARE"
       ;;
     firmware_not_contains)
-      ! strings "$FIRMWARE" | grep -Fq -- "$expected"
+      local elf="${FIRMWARE%/*}/firmware.elf"
+      if [[ -f "$elf" ]] && LC_ALL=C grep -aFq -- "$expected" "$elf"; then
+        return 1
+      fi
+      ! LC_ALL=C grep -aFq -- "$expected" "$FIRMWARE"
       ;;
     python_script)
       path="$REPO/$target"

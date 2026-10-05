@@ -8,8 +8,8 @@
 
 class UsermodSpotifyConnect : public Usermod {
 private:
-  static constexpr const char* USERMOD_VERSION = "0.1.0-dev.2c-pcm-ingress";
-  static constexpr const char* USERMOD_REVISION = "r1";
+  static constexpr const char* USERMOD_VERSION = "0.1.0-dev.2d-loginblob";
+  static constexpr const char* USERMOD_REVISION = "r4";
   bool enabled_ = false;
   bool ready_ = false;
   bool initPending_ = false;
@@ -122,14 +122,27 @@ public:
     if (!enabled_) s.add(F("disabled"));
     else if (!ready_ && selectClockMode() == ClockMode::WaitingSharedClock) s.add(F("waiting: AudioReactive owns clocks but LRCK inactive"));
     else if (!ready_) s.add(String(F("audio not ready: "))+audio_.lastError());
-    else s.add(F("audio ready | Spotify Zeroconf discovery gate"));
+    else s.add(F("audio ready | Spotify LoginBlob diagnostic gate"));
 
     JsonArray z=user.createNestedArray(F("Spotify Zeroconf"));
     z.add(String(F("state=")) + zeroConf_.stateName() + F(" | cpath=") + zeroConf_.cpath());
     z.add(String(F("mdns=")) + (zeroConf_.advertised() ? F("advertised") : F("pending")) +
           F(" attempts=") + zeroConf_.advertiseAttempts() + F(" getInfo=") + zeroConf_.getInfoRequests() +
-          F(" addUser=") + zeroConf_.addUserRequests() + F(" rejected=") + zeroConf_.rejectedAddUserRequests());
-    z.add(String(F("deviceId=")) + zeroConf_.deviceId() + F(" | auth=next milestone pending"));
+          F(" addUser=") + zeroConf_.addUserRequests() + F(" accepted=") + zeroConf_.acceptedAddUserRequests() + F(" failed=") + zeroConf_.failedAddUserRequests());
+    z.add(String(F("deviceId=")) + zeroConf_.deviceId() +
+          F(" | credential=") + (zeroConf_.credentialsReady() ? F("stored") : F("none")) +
+          F(" authType=") + zeroConf_.authType() + F(" authBytes=") + zeroConf_.authDataBytes());
+    z.add(String(F("addUser params user=")) + (zeroConf_.lastAddUserUserPresent() ? F("present") : F("missing")) +
+          F(":") + zeroConf_.authInputUserBytes() +
+          F(" blob=") + (zeroConf_.lastAddUserBlobPresent() ? F("present") : F("missing")) + F(":") + zeroConf_.authInputBlobB64Bytes() +
+          F(" clientKey=") + (zeroConf_.lastAddUserClientKeyPresent() ? F("present") : F("missing")) + F(":") + zeroConf_.authInputClientKeyB64Bytes());
+    z.add(String(F("LoginBlob stage=")) + zeroConf_.authStage() + F(" result=") + zeroConf_.authLastResult() +
+          F(" | decoded blob=") + zeroConf_.authDecodedBlobBytes() + F(" clientKey=") + zeroConf_.authDecodedClientKeyBytes() +
+          F(" primary=") + zeroConf_.authPrimaryBytes() + F(" secondary=") + zeroConf_.authSecondaryBytes());
+    z.add(F("LoginBlob crypto=streaming SHA1 + manual HMAC-SHA1 + software AES-192 ECB"));
+    z.add(String(F("LoginBlob attempts=")) + zeroConf_.authDecodeAttempts() +
+          F(" ok=") + zeroConf_.authDecodeSuccesses() + F(" persisted=") + zeroConf_.authPersistSuccesses() +
+          F(" credentialUserBytes=") + zeroConf_.userNameBytes() + F(" lastError=") + zeroConf_.authError());
 
     JsonArray a=user.createNestedArray(F("Spotify audio"));
     const auto t=audio_.telemetry();

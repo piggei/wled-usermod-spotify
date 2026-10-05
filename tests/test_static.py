@@ -11,10 +11,10 @@ pcm_h = (root / "spotify" / "SpotifyPcmTestSource.h").read_text()
 pcm_cpp = (root / "spotify" / "SpotifyPcmTestSource.cpp").read_text()
 
 assert lib["name"] == "wled-usermod-spotify"
-assert lib["version"] == "0.1.0-dev.2c-pcm-ingress-r1"
+assert lib["version"] == "0.1.0-dev.2d-loginblob-r4"
 assert lib["build"]["libArchive"] is False
-assert 'USERMOD_VERSION = "0.1.0-dev.2c-pcm-ingress"' in header
-assert 'USERMOD_REVISION = "r1"' in header
+assert 'USERMOD_VERSION = "0.1.0-dev.2d-loginblob"' in header
+assert 'USERMOD_REVISION = "r4"' in header
 assert "toneTestLoop" not in header
 assert "playTestTone" not in header
 assert "audio_.startTestTone" in header
@@ -46,4 +46,34 @@ assert "err == ESP_OK && written == bytesToWrite && volumePending_" in out_cpp
 assert "spotifyVolRange" in header
 assert "a.forEach(e=>e.style.display='none')" in header
 assert "e.type='range'" not in header
+login_h = (root / "spotify" / "SpotifyLoginBlob.h").read_text()
+login_cpp = (root / "spotify" / "SpotifyLoginBlob.cpp").read_text()
+zc_h = (root / "spotify" / "SpotifyZeroConfProbe.h").read_text()
+zc_cpp = (root / "spotify" / "SpotifyZeroConfProbe.cpp").read_text()
+assert "decodeAndStore" in login_h and "SpotifyLoginBlob::decodeAndStore" in login_cpp
+assert "DH_PRIME_HEX" in login_cpp and "mbedtls_mpi_exp_mod" in login_cpp
+assert "mbedtls_aes_crypt_ctr" in login_cpp
+aes192_h = (root / "spotify" / "Aes192Software.h").read_text()
+aes192_cpp = (root / "spotify" / "Aes192Software.cpp").read_text()
+assert "aes192DecryptEcbInPlace" in login_cpp and "aes192DecryptEcbInPlace" in aes192_h
+assert "kRounds = 12u" in aes192_cpp and "kKeyBytes = 24u" in aes192_cpp
+assert "mbedtls_aes_setkey_dec(&aes, aesKey, 192u)" not in login_cpp
+assert "pbkdf2Sha1" in login_cpp and "MacMismatch" in login_h
+assert "spotify_auth.bin" in login_cpp
+assert 'action != "addUser"' in zc_cpp
+assert 'action == "resetUsers"' in zc_cpp
+assert "ERROR-INVALID-PUBLICKEY" in zc_cpp
+assert "acceptedAddUserRequests" in zc_h
+assert "diagnosticStageName" in login_h and "stageName(Stage" in login_cpp
+assert "addUser params user=" in header and "LoginBlob stage=" in header
+assert "decoded blob=" in header and "credentialUserBytes=" in header
+assert "lastAddUserUserPresent_" in zc_h and 'request->hasParam("userName", true)' in zc_cpp
+assert "mbedtls_sha1_starts(&ctx)" in login_cpp
+assert "normalizedKey[i] ^ 0x36u" in login_cpp and "normalizedKey[i] ^ 0x5cu" in login_cpp
+assert "mbedtls_md_info_from_type" not in login_cpp
+assert "mbedtls_md_hmac" not in login_cpp
+assert "mbedtls_sha1_ret" not in login_cpp
+assert "mbedtls_sha1(data" not in login_cpp
+assert login_cpp.count("++persistSuccesses_;") == 1
+
 print("static checks: PASS")

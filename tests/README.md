@@ -7,7 +7,7 @@ Project-specific test definitions live in TSV files so the WLED update helper do
 Automatic checks run by `tools/test_runner.sh` in two phases:
 
 - `prebuild`: source/package checks after the downloaded archive has been synchronized into the external usermod repository.
-- `postbuild`: checks against the generated WLED `firmware.bin`.
+- `postbuild`: checks the generated PlatformIO firmware artifacts, preferring sibling `firmware.elf` and falling back to `firmware.bin`.
 
 Columns:
 

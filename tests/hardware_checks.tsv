@@ -5,7 +5,15 @@ AUDIO_CONTINUOUS	manual	Leave direct test tone running until explicitly stopped	
 VOLUME_UI	manual	Open Settings -> Usermods -> Spotify Connect	Exactly one 0-100 Volume slider is visible; no duplicate numeric field	PASS	Qualified on dev.2b-audio-refactor-r2
 VOLUME_RUNTIME	manual	Move Volume slider while tone is active	Audible level changes and saved value is used after reboot	PASS	Qualified on dev.2b-audio-refactor-r2
 I2S_TELEMETRY	json	Read /json/info while direct tone is active	shared 22050 Hz, output 32-bit, DMA 8x256, err=0, short=0, late=0, ringUnderrun=0	PASS	Qualified on dev.2b-audio-refactor-r2
-PCM44_PITCH	manual	Start /spotify-test?action=start-pcm&tone=1000	Tone is clean, continuous and has the same 1 kHz pitch as the direct test	PENDING	dev.2c-r1 gate
-PCM44_RATIO	json	Read /json/info after start-pcm has run for at least 30 seconds	PCM ingress 44100->22050; inFrames is approximately 2x outFrames; failures=0 and feedFail=0	PENDING	dev.2c-r1 gate
-PCM44_RING	json	Read /json/info while start-pcm is active	ringUnderrun=0 and I2S err=0 short=0 late=0	PENDING	dev.2c-r1 gate
-PCM44_STOP	manual	Call /spotify-test?action=stop while start-pcm is active	Playback stops promptly and buffered PCM is flushed	PENDING	dev.2c-r1 gate
+PCM44_PITCH	manual	Start /spotify-test?action=start-pcm&tone=1000	Tone is clean, continuous and has the same 1 kHz pitch as the direct test	PASS	Qualified on dev.2c-pcm-ingress-r1
+PCM44_RATIO	json	Read /json/info after start-pcm has run for at least 30 seconds	PCM ingress 44100->22050; inFrames is approximately 2x outFrames; failures=0 and feedFail=0	PASS	Qualified on dev.2c-pcm-ingress-r1
+PCM44_RING	json	Read /json/info while start-pcm is active	ringUnderrun=0 and I2S err=0 short=0 late=0	PASS	Qualified on dev.2c-pcm-ingress-r1
+PCM44_STOP	manual	Call /spotify-test?action=stop while start-pcm is active	Playback stops promptly and buffered PCM is flushed	PASS	Qualified on dev.2c-pcm-ingress-r1
+LOGINBLOB_DISCOVERY	manual	Cold boot and open Spotify Devices list on the same LAN	WLED Matrix is advertised and remains discoverable	PASS	Qualified on dev.2d-r2
+LOGINBLOB_INPUTS	json	Select WLED Matrix once, then read /json/info	addUser params reports user/blob/clientKey as present with non-zero lengths; no values are exposed	PASS	dev.2d-r2 observed user=28 blob=476 clientKey=128
+LOGINBLOB_STAGE	json	After one addUser attempt read /json/info	LoginBlob stage/result identifies the exact last completed/failing stage and decoded byte counts	PASS	dev.2d-r2 localized failure to primary-sha1 after decoded blob=356 clientKey=96
+LOGINBLOB_SHA_PRIMARY	json	Select WLED Matrix once, then read /json/info	LoginBlob advances beyond primary-sha1 and primary AES-CTR produces non-zero primary bytes	PASS	dev.2d-r3 reached secondary-aes-ecb with primary=320 secondary=240
+LOGINBLOB_ADDUSER	manual	Select WLED Matrix from the official Spotify app	addUser increments and accepted becomes 1; failed remains 0	PENDING	dev.2d-r4 software AES-192 gate
+LOGINBLOB_CREDENTIAL	json	Read /json/info after selecting the device	credential=stored, authType=1, authBytes>0, LoginBlob ok=1 and persisted=1	PENDING	dev.2d-r4 software AES-192 gate
+LOGINBLOB_REBOOT	manual	Reboot after one successful addUser and read /json/info without selecting device again	credential=stored is restored from LittleFS; no username/authData is printed	PENDING	dev.2d-r4 software AES-192 gate
+LOGINBLOB_AUDIO_REGRESSION	manual	After LoginBlob gate test start /spotify-test?action=start-pcm&tone=1000	Qualified PCM tone remains clean; I2S err=0 short=0 late=0 ringUnderrun=0	PENDING	dev.2d-r4 software AES-192 gate

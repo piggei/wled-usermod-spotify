@@ -103,3 +103,12 @@ The 64 KiB PCM stream buffer is now backed by PSRAM through `xStreamBufferCreate
 
 ### r9 note
 The bring-up default volume is now 70%. WLED persists Usermod configuration, so an already-saved value (for example 40% from r8) remains authoritative until it is changed once in Config -> Usermods and saved.
+
+## dev.2d LoginBlob authentication gate
+
+The dev.2d-r4 line enables real Spotify Zeroconf `addUser` authentication and keeps the target-compatible streaming SHA1/manual-HMAC backend qualified by r3 while adding the ESP32-S3-compatible software AES-192 secondary decrypt. It generates a real 96-byte DH public key, decodes the cspot-compatible LoginBlob, stores the reusable credential in LittleFS, and restores it after reboot. It intentionally stops before the AP/Shannon session so protocol authentication can be qualified separately from the network/session runtime. See `docs/DEV2D_LOGINBLOB.md`.
+
+
+### dev.2d-loginblob-r4
+
+r3 hardware diagnostics progressed through the complete primary layer and stopped at `secondary-aes-ecb` with `primary=320` and `secondary=240`. ESP32-S3 hardware AES supports AES-128/AES-256 but not the AES-192 required by Spotify's secondary LoginBlob layer, so r4 adds a small software AES-192 ECB decryptor used only during pairing. It is prebuild-verified against a FIPS-197 AES-192 known-answer vector. r4 also fixes the generic postbuild runner false-negative caused by `strings | grep -q` under `pipefail`; firmware checks now search ELF/BIN raw bytes directly. Audio/PCM runtime remains frozen.

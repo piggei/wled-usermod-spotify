@@ -8,19 +8,41 @@ LIB_ARCHIVE	prebuild	required	file_contains	library.json	"libArchive": false	Pla
 LIB_SRCDIR	prebuild	required	file_contains	library.json	"srcDir": "."	library source root is repository root
 LIB_AUDIO	prebuild	required	file_contains	library.json	+<audio/*.cpp>	audio translation units are included
 LIB_SPOTIFY	prebuild	required	file_contains	library.json	+<spotify/*.cpp>	Spotify translation units are included
-BUILD_LINE	prebuild	required	file_contains	usermod_spotify_connect.h	USERMOD_VERSION = "0.1.0-dev.2c-pcm-ingress"	functional development line is correct
-BUILD_REV	prebuild	required	file_contains	usermod_spotify_connect.h	USERMOD_REVISION = "r1"	revision marker is r1
-ZEROCONF_GATE	prebuild	required	tree_contains	.	Spotify Zeroconf discovery gate	Zeroconf discovery gate is retained
+BUILD_LINE	prebuild	required	file_contains	usermod_spotify_connect.h	USERMOD_VERSION = "0.1.0-dev.2d-loginblob"	functional development line is correct
+BUILD_REV	prebuild	required	file_contains	usermod_spotify_connect.h	USERMOD_REVISION = "r4"	revision marker is r4
+ZEROCONF_GATE	prebuild	required	tree_contains	.	spotify-connect	Spotify mDNS discovery service is retained
 AUDIO_POLICY	prebuild	required	tree_contains	.	policy=shared 32-bit slave when owned+clocked	qualified 32-bit shared-I2S policy is retained
 PCM_INGRESS	prebuild	required	tree_contains	.	enqueuePcm44100	cspot-facing 44.1 kHz PCM ingress is present
 PCM_TEST_ENDPOINT	prebuild	required	file_contains	usermod_spotify_connect.h	action == "start-pcm"	cspot-like PCM gate endpoint is present
 NO_OLD_AR_BLOCK	prebuild	required	tree_not_contains	.	blocked: AudioReactive owns shared I2S clocks	obsolete AudioReactive ownership blocker is absent
 NO_OLD_LRCK_BLOCK	prebuild	required	tree_not_contains	.	blocked: shared LRCK active (AudioReactive/I2S0)	obsolete LRCK blocker is absent
+LOGINBLOB_HEADER	prebuild	required	file_exists	spotify/SpotifyLoginBlob.h	present	LoginBlob interface is present
+LOGINBLOB_CPP	prebuild	required	file_exists	spotify/SpotifyLoginBlob.cpp	present	LoginBlob implementation is present
+AES192_CPP	prebuild	required	file_exists	spotify/Aes192Software.cpp	present	software AES-192 fallback is present
+LOGINBLOB_DH	prebuild	required	tree_contains	.	mbedtls_mpi_exp_mod	real 96-byte DH exchange is present
+LOGINBLOB_AESCTR	prebuild	required	tree_contains	.	mbedtls_aes_crypt_ctr	primary LoginBlob AES-CTR decode is present
+LOGINBLOB_AES192	prebuild	required	tree_contains	.	aes192DecryptEcbInPlace	secondary LoginBlob AES-192 software decode is present
+LOGINBLOB_NO_HW192	prebuild	required	file_not_contains	spotify/SpotifyLoginBlob.cpp	mbedtls_aes_setkey_dec(&aes, aesKey, 192u)	unsupported ESP32-S3 AES-192 mbedTLS path is absent
+AES192_VECTOR	prebuild	required	python_script	tests/test_aes192_vector.py	exit=0	AES-192 FIPS known-answer decrypt vector passes
+LOGINBLOB_PBKDF2	prebuild	required	tree_contains	.	pbkdf2Sha1	secondary credential decode KDF is present
+LOGINBLOB_STORE	prebuild	required	tree_contains	.	/spotify_auth.bin	reusable credential persistence is present
+ADDUSER_ENDPOINT	prebuild	required	file_contains	spotify/SpotifyZeroConfProbe.cpp	action != "addUser"	Zeroconf addUser handler is enabled
+RESETUSER_ENDPOINT	prebuild	required	file_contains	spotify/SpotifyZeroConfProbe.cpp	action == "resetUsers"	Zeroconf resetUsers handler is enabled
+LOGIN_DIAG_STAGE	prebuild	required	tree_contains	.	diagnosticStageName	LoginBlob stage diagnostics are present
+LOGIN_DIAG_PARAMS	prebuild	required	file_contains	usermod_spotify_connect.h	addUser params user=	addUser parameter-presence diagnostics are present
+LOGIN_DIAG_LENGTHS	prebuild	required	file_contains	usermod_spotify_connect.h	decoded blob=	decoded-length diagnostics are present
+LOGIN_SHA1_STREAM	prebuild	required	file_contains	spotify/SpotifyLoginBlob.cpp	mbedtls_sha1_starts(&ctx)	SHA1 uses the target-supported streaming context API
+LOGIN_HMAC_MANUAL	prebuild	required	file_contains	spotify/SpotifyLoginBlob.cpp	normalizedKey[i] ^ 0x36u	HMAC-SHA1 is implemented over the streaming SHA1 primitive
+NO_SHA1_MD	prebuild	required	file_not_contains	spotify/SpotifyLoginBlob.cpp	mbedtls_md_info_from_type	generic SHA1 digest registry dependency is absent
+NO_SHA1_RET	prebuild	required	file_not_contains	spotify/SpotifyLoginBlob.cpp	mbedtls_sha1_ret	removed SHA1 API is absent
+NO_SHA1_LEGACY	prebuild	required	file_not_contains	spotify/SpotifyLoginBlob.cpp	mbedtls_sha1(data	legacy direct SHA1 API is absent
+RUNNER_FW_SEARCH	prebuild	required	python_script	tests/test_runner_firmware_search.py	exit=0	postbuild raw firmware search regression passes under pipefail
 STATIC_PY	prebuild	required	python_script	tests/test_static.py	exit=0	static source regression suite passes
-FW_VERSION	postbuild	required	firmware_contains	firmware	0.1.0-dev.2c-pcm-ingress	firmware contains development-line marker
-FW_REVISION	postbuild	required	firmware_contains	firmware	r1	firmware contains revision marker
-FW_ZEROCONF	postbuild	required	firmware_contains	firmware	Spotify Zeroconf discovery gate	firmware contains Zeroconf gate marker
+FW_VERSION	postbuild	required	firmware_contains	firmware	0.1.0-dev.2d-loginblob	firmware contains development-line marker
+FW_REVISION	postbuild	required	firmware_contains	firmware	r4	firmware contains revision marker
+FW_ZEROCONF	postbuild	required	firmware_contains	firmware	Spotify LoginBlob diagnostic gate	firmware contains LoginBlob auth gate marker
 FW_AUDIO_POLICY	postbuild	required	firmware_contains	firmware	policy=shared 32-bit slave when owned+clocked	firmware contains qualified shared-I2S policy
 FW_PCM_INGRESS	postbuild	required	firmware_contains	firmware	PCM ingress 44100->	firmware contains PCM ingress diagnostics
+FW_LOGINBLOB	postbuild	required	firmware_contains	firmware	LoginBlob attempts=	firmware contains LoginBlob diagnostics
 FW_NO_OLD_AR_BLOCK	postbuild	required	firmware_not_contains	firmware	blocked: AudioReactive owns shared I2S clocks	firmware does not contain obsolete AudioReactive blocker
 FW_NO_OLD_LRCK_BLOCK	postbuild	required	firmware_not_contains	firmware	blocked: shared LRCK active (AudioReactive/I2S0)	firmware does not contain obsolete LRCK blocker
