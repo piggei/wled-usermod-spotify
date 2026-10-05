@@ -8,8 +8,8 @@ LIB_ARCHIVE	prebuild	required	file_contains	library.json	"libArchive": false	Pla
 LIB_SRCDIR	prebuild	required	file_contains	library.json	"srcDir": "."	library source root is repository root
 LIB_AUDIO	prebuild	required	file_contains	library.json	+<audio/*.cpp>	audio translation units are included
 LIB_SPOTIFY	prebuild	required	file_contains	library.json	+<spotify/*.cpp>	Spotify translation units are included
-BUILD_LINE	prebuild	required	file_contains	usermod_spotify_connect.h	USERMOD_VERSION = "0.1.0-dev.2e-ap-auth"	AP authentication development line is correct
-BUILD_REV	prebuild	required	file_contains	usermod_spotify_connect.h	USERMOD_REVISION = "r2"	revision marker is r2
+BUILD_LINE	prebuild	required	file_contains	usermod_spotify_connect.h	USERMOD_VERSION = "0.1.0-dev.2f-mercury-session"	functional development line is dev.2f Mercury session
+BUILD_REV	prebuild	required	file_contains	usermod_spotify_connect.h	USERMOD_REVISION = "r1"	revision marker is r1
 ZEROCONF_GATE	prebuild	required	tree_contains	.	spotify-connect	Spotify mDNS discovery service is retained
 AUDIO_POLICY	prebuild	required	tree_contains	.	policy=shared 32-bit slave when owned+clocked	qualified 32-bit shared-I2S policy is retained
 PCM_INGRESS	prebuild	required	tree_contains	.	enqueuePcm44100	cspot-facing 44.1 kHz PCM ingress is present
@@ -60,18 +60,26 @@ SESSION_LOGIN_CMD	prebuild	required	file_contains	spotify/SpotifySessionProbe.cp
 SESSION_WELCOME_CMD	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp	AUTH_SUCCESSFUL_COMMAND = 0xACu	Spotify APWelcome command 0xAC is present
 SESSION_DECLINE_CMD	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp	AUTH_DECLINED_COMMAND = 0xADu	Spotify APLoginFailed command 0xAD is present
 SESSION_CREDENTIAL_GETTERS	prebuild	required	file_contains	spotify/SpotifyZeroConfProbe.h	const std::vector<uint8_t>& authData() const	qualified cached credential is exposed only to the AP session gate
-SESSION_SCOPE	prebuild	required	file_contains	usermod_spotify_connect.h	scope=ClientHello + DH + Shannon + stored-credential AP auth only; Mercury/playback next gate	scope remains limited to AP authentication
+SESSION_SCOPE	prebuild	required	file_contains	usermod_spotify_connect.h	scope=persistent Shannon + PING/PONG + country + Mercury remote-user SUB; SPIRC/metadata/playback next gate	scope is limited to persistent Shannon and minimal Mercury
 THIRD_PARTY_CSPOT	prebuild	required	file_contains	THIRD_PARTY_NOTICES.md	GPL-3.0-or-later	cspot licensing note is accurate and does not repeat the earlier MIT assumption
 THIRD_PARTY_SHANNON	prebuild	required	file_contains	THIRD_PARTY_NOTICES.md	independent C++ implementation	Shannon implementation provenance is documented
+SESSION_PERSIST_CONTRACT	prebuild	required	python_script	tests/test_dev2f_session_contract.py	exit=0	persistent Shannon/Mercury protocol contract passes
+SESSION_PING_PONG	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp	PONG_COMMAND = 0x49u	Spotify AP ping/pong keepalive is present
+SESSION_MERCURY_SUB	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp	MERCURY_SUB_COMMAND = 0xB3u	Mercury remote-user subscription command is present
+SESSION_MERCURY_URI	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp	hm://remote/3/user/	current remote-user Mercury subscription URI is present
+SESSION_RECONNECT	prebuild	required	file_contains	spotify/SpotifySessionProbe.h	MAX_AUTO_RECONNECTS = 5u	bounded automatic AP reconnect is present
+LOGINBLOB_NO_REWRITE	prebuild	required	file_contains	spotify/SpotifyLoginBlob.cpp	persistSkips_	repeated identical credentials skip LittleFS rewrite
 STATIC_PY	prebuild	required	python_script	tests/test_static.py	exit=0	static source regression suite passes including AP auth integration
 FW_SHANNON	postbuild	required	firmware_contains	firmware	Shannon keys tx=	firmware contains Shannon session diagnostics
 FW_AP_AUTH	postbuild	required	firmware_contains	firmware	AP auth attempts=	firmware contains AP authentication diagnostics
-FW_VERSION	postbuild	required	firmware_contains	firmware	0.1.0-dev.2e-ap-auth	firmware contains AP authentication development-line marker
-FW_REVISION	postbuild	required	firmware_contains	firmware	r2	firmware contains revision marker
-FW_ZEROCONF	postbuild	required	firmware_contains	firmware	Spotify AP authentication gate	firmware contains AP authentication gate marker
+FW_VERSION	postbuild	required	firmware_contains	0.1.0-dev.2f-mercury-session	0.1.0-dev.2e-ap-auth	firmware contains dev.2f session marker
+FW_REVISION	postbuild	required	firmware_contains	r1	r2	firmware contains revision marker
+FW_ZEROCONF	postbuild	required	firmware_contains	Spotify persistent Shannon/Mercury gate	Spotify AP authentication gate	firmware contains persistent-session gate marker
 FW_AUDIO_POLICY	postbuild	required	firmware_contains	firmware	policy=shared 32-bit slave when owned+clocked	firmware contains qualified shared-I2S policy
 FW_PCM_INGRESS	postbuild	required	firmware_contains	firmware	PCM ingress 44100->	firmware contains PCM ingress diagnostics
 FW_LOGINBLOB	postbuild	required	firmware_contains	firmware	LoginBlob attempts=	firmware contains LoginBlob diagnostics
-FW_SESSION	postbuild	required	firmware_contains	firmware	scope=ClientHello + DH + Shannon + stored-credential AP auth only	firmware contains AP authentication scope marker
+FW_SESSION	postbuild	required	firmware_contains	scope=persistent Shannon + PING/PONG + country + Mercury remote-user SUB; SPIRC/metadata/playback next gate	scope=ClientHello + DH + Shannon + stored-credential AP auth only	firmware contains dev.2f scope marker
+FW_KEEPALIVE	postbuild	required	firmware_contains	firmware	keepalive ping=	firmware contains persistent keepalive diagnostics
+FW_MERCURY	postbuild	required	firmware_contains	firmware	Mercury SUB attempts=	firmware contains Mercury diagnostics
 FW_NO_OLD_AR_BLOCK	postbuild	required	firmware_not_contains	firmware	blocked: AudioReactive owns shared I2S clocks	firmware does not contain obsolete AudioReactive blocker
 FW_NO_OLD_LRCK_BLOCK	postbuild	required	firmware_not_contains	firmware	blocked: shared LRCK active (AudioReactive/I2S0)	firmware does not contain obsolete LRCK blocker

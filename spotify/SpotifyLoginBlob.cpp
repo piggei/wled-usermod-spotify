@@ -417,6 +417,15 @@ bool SpotifyLoginBlob::begin(const char* deviceId) {
 
 SpotifyLoginBlob::Result SpotifyLoginBlob::decodeAndStore(const String& userName, const String& blobB64, const String& clientKeyB64) {
   ++decodeAttempts_;
+
+  // Keep the last qualified credential until a replacement has been decoded
+  // and (when changed) persisted successfully. This also lets us detect an
+  // identical addUser without wearing LittleFS with a redundant rewrite.
+  const bool hadCredential = credentialsReady_;
+  const String previousUser = userName_;
+  const uint8_t previousAuthType = authType_;
+  std::vector<uint8_t> previousAuthData = authData_;
+
   credentialsReady_ = false;
   authType_ = 0u;
   authData_.clear();
@@ -431,10 +440,24 @@ SpotifyLoginBlob::Result SpotifyLoginBlob::decodeAndStore(const String& userName
   secondaryDecodedBytes_ = 0u;
   lastResultValid_ = false;
 
-  auto finish = [this](Result result) -> Result {
+  auto finish = [this, hadCredential, previousUser, previousAuthType, &previousAuthData](Result result) -> Result {
+    if (result != Result::Ok) {
+      if (hadCredential) {
+        userName_ = previousUser;
+        authType_ = previousAuthType;
+        authData_ = previousAuthData;
+        credentialsReady_ = true;
+      } else {
+        userName_ = "";
+        authType_ = 0u;
+        authData_.clear();
+        credentialsReady_ = false;
+      }
+    }
     lastResult_ = result;
     lastResultValid_ = true;
     lastError_ = result == Result::Ok ? "none" : resultName(result);
+    std::fill(previousAuthData.begin(), previousAuthData.end(), 0u);
     return result;
   };
 
@@ -471,9 +494,15 @@ SpotifyLoginBlob::Result SpotifyLoginBlob::decodeAndStore(const String& userName
   if (result != Result::Ok) return finish(result);
   ++decodeSuccesses_;
 
+  const bool unchanged = hadCredential && previousUser == userName_ &&
+                         previousAuthType == authType_ && previousAuthData == authData_;
   diagnosticStage_ = Stage::PersistCredential;
-  if (!persist()) return finish(Result::PersistFailure);
-  ++persistSuccesses_;
+  if (unchanged) {
+    ++persistSkips_;
+  } else {
+    if (!persist()) return finish(Result::PersistFailure);
+    ++persistSuccesses_;
+  }
 
   diagnosticStage_ = Stage::Complete;
   return finish(Result::Ok);

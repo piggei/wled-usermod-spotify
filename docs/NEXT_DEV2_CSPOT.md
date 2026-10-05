@@ -1,20 +1,21 @@
-# Next milestone after dev.2e-r2
+# Next milestone after dev.2f-r1
 
 Do not change the qualified shared-I2S/ES8311/DMA/PCM path, the dev.2d LoginBlob
-credential path, or the r1c AP resolver/TCP transport unless a regression
-requires it.
+credential path, or the dev.2e AP resolver/TCP/handshake/Shannon authentication
+path unless a regression requires it.
 
-The current r2 gate ends immediately after encrypted AP authentication. Once
-hardware testing shows repeatable `APWelcome` (`0xAC`), the next milestone is a
-**minimal long-lived Spotify control session**:
+The dev.2f-r1 gate keeps the authenticated Shannon socket alive, handles AP
+PING/PONG and country packets, sends the first Mercury remote-user SUB and adds
+bounded reconnect plus duplicate-credential flash-write suppression. Once those
+behaviors are qualified on hardware, the next milestone is the minimum Spotify
+Connect control plane:
 
-1. keep the authenticated Shannon socket open;
-2. handle AP ping/pong and disconnect/reconnect safely;
-3. add the minimum Mercury request/response dispatcher required by Connect;
-4. establish the minimum SPIRC/device-control state so the receiver remains a
-   usable Spotify Connect target after selection;
-5. expose metadata/state callbacks without touching the audio backend;
-6. qualify reconnects and memory/stack behavior before enabling track decode.
+1. parse the remote-user Mercury subscription payloads needed by Connect;
+2. add the minimum SPIRC protobuf/state required to announce the device;
+3. send the initial SPIRC hello/notify state without touching the audio backend;
+4. accept load/play/pause/seek/volume control messages and expose them only as
+   diagnostics/callbacks in the first control-plane build;
+5. qualify takeover, reconnect, memory and stack behavior before media decode.
 
 Only after the control plane is stable should the media path be added:
 

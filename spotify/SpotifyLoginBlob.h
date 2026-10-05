@@ -59,6 +59,7 @@ public:
   uint32_t decodeAttempts() const { return decodeAttempts_; }
   uint32_t decodeSuccesses() const { return decodeSuccesses_; }
   uint32_t persistSuccesses() const { return persistSuccesses_; }
+  uint32_t persistSkips() const { return persistSkips_; }
 
   Stage diagnosticStage() const { return diagnosticStage_; }
   const char* diagnosticStageName() const { return stageName(diagnosticStage_); }
@@ -110,6 +111,7 @@ private:
   uint32_t decodeAttempts_ = 0;
   uint32_t decodeSuccesses_ = 0;
   uint32_t persistSuccesses_ = 0;
+  uint32_t persistSkips_ = 0;
 
   mutable Stage diagnosticStage_ = Stage::Idle;
   Result lastResult_ = Result::Ok;

@@ -9,8 +9,8 @@
 
 class UsermodSpotifyConnect : public Usermod {
 private:
-  static constexpr const char* USERMOD_VERSION = "0.1.0-dev.2e-ap-auth";
-  static constexpr const char* USERMOD_REVISION = "r2";
+  static constexpr const char* USERMOD_VERSION = "0.1.0-dev.2f-mercury-session";
+  static constexpr const char* USERMOD_REVISION = "r1";
   bool enabled_ = false;
   bool ready_ = false;
   bool initPending_ = false;
@@ -68,7 +68,7 @@ public:
     server.on(F("/spotify-session"), HTTP_GET, [this](AsyncWebServerRequest* request) {
       if (!enabled_) { request->send(409, FPSTR(CONTENT_TYPE_PLAIN), F("Spotify usermod disabled")); return; }
       if (!request->hasParam("action")) {
-        request->send(400, FPSTR(CONTENT_TYPE_PLAIN), F("Use ?action=probe or ?action=reset"));
+        request->send(400, FPSTR(CONTENT_TYPE_PLAIN), F("Use ?action=probe, ?action=stop or ?action=reset"));
         return;
       }
       const String action = request->getParam("action")->value();
@@ -78,16 +78,22 @@ public:
           return;
         }
         if (!sessionProbe_.startNow(zeroConf_.userName(), zeroConf_.authType(), zeroConf_.authData(), zeroConf_.deviceId())) {
-          request->send(409, FPSTR(CONTENT_TYPE_PLAIN), String(F("AP auth probe not started: state=")) + sessionProbe_.stateName() + F(" error=") + sessionProbe_.lastError());
+          request->send(409, FPSTR(CONTENT_TYPE_PLAIN), String(F("Spotify session not started: state=")) + sessionProbe_.stateName() + F(" error=") + sessionProbe_.lastError());
           return;
         }
-        request->send(202, FPSTR(CONTENT_TYPE_PLAIN), F("Spotify AP handshake/auth probe started; inspect /json/info"));
+        request->send(202, FPSTR(CONTENT_TYPE_PLAIN), F("Spotify persistent AP/Mercury session started; inspect /json/info"));
+        return;
+      }
+      if (action == "stop") {
+        if (!sessionProbe_.active()) { request->send(409, FPSTR(CONTENT_TYPE_PLAIN), F("Spotify session is not active")); return; }
+        sessionProbe_.requestStop();
+        request->send(202, FPSTR(CONTENT_TYPE_PLAIN), F("Spotify session stop requested"));
         return;
       }
       if (action == "reset") {
-        if (sessionProbe_.active()) { request->send(409, FPSTR(CONTENT_TYPE_PLAIN), F("AP probe is active")); return; }
+        if (sessionProbe_.active()) { request->send(409, FPSTR(CONTENT_TYPE_PLAIN), F("Spotify session is active; use action=stop first")); return; }
         sessionProbe_.reset();
-        request->send(200, FPSTR(CONTENT_TYPE_PLAIN), F("Spotify AP auth telemetry reset"));
+        request->send(200, FPSTR(CONTENT_TYPE_PLAIN), F("Spotify session telemetry reset"));
         return;
       }
       request->send(400, FPSTR(CONTENT_TYPE_PLAIN), F("Unknown action"));
@@ -134,9 +140,9 @@ public:
   }
 
   void loop() override {
+    sessionProbe_.loop(enabled_, zeroConf_.credentialsReady(), zeroConf_.userName(), zeroConf_.authType(), zeroConf_.authData(), zeroConf_.deviceId());
     if (!enabled_) return;
     zeroConf_.loop(deviceName_);
-    sessionProbe_.loop(enabled_, zeroConf_.credentialsReady(), zeroConf_.userName(), zeroConf_.authType(), zeroConf_.authData(), zeroConf_.deviceId());
     if (initPending_ && millis()-initSince_ > 2500u) {
       initPending_=false;
       startAudio();
@@ -153,7 +159,7 @@ public:
     if (!enabled_) s.add(F("disabled"));
     else if (!ready_ && selectClockMode() == ClockMode::WaitingSharedClock) s.add(F("waiting: AudioReactive owns clocks but LRCK inactive"));
     else if (!ready_) s.add(String(F("audio not ready: "))+audio_.lastError());
-    else s.add(F("audio ready | Spotify AP authentication gate"));
+    else s.add(F("audio ready | Spotify persistent Shannon/Mercury gate"));
 
     JsonArray z=user.createNestedArray(F("Spotify Zeroconf"));
     z.add(String(F("state=")) + zeroConf_.stateName() + F(" | cpath=") + zeroConf_.cpath());
@@ -172,7 +178,7 @@ public:
           F(" primary=") + zeroConf_.authPrimaryBytes() + F(" secondary=") + zeroConf_.authSecondaryBytes());
     z.add(F("LoginBlob crypto=streaming SHA1 + manual HMAC-SHA1 + software AES-192 ECB"));
     z.add(String(F("LoginBlob attempts=")) + zeroConf_.authDecodeAttempts() +
-          F(" ok=") + zeroConf_.authDecodeSuccesses() + F(" persisted=") + zeroConf_.authPersistSuccesses() +
+          F(" ok=") + zeroConf_.authDecodeSuccesses() + F(" persisted=") + zeroConf_.authPersistSuccesses() + F(" persistSkip=") + zeroConf_.authPersistSkips() +
           F(" credentialUserBytes=") + zeroConf_.userNameBytes() + F(" lastError=") + zeroConf_.authError());
 
     JsonArray n=user.createNestedArray(F("Spotify session"));
@@ -184,7 +190,7 @@ public:
           F(" http=") + sessionProbe_.resolveHttpCode() + F(" bytes=") + sessionProbe_.resolveResponseBytes() +
           F(" fallback=") + sessionProbe_.fallbackUses());
     n.add(String(F("AP TCP attempts=")) + sessionProbe_.tcpAttempts() + F(" ok=") + sessionProbe_.tcpSuccesses() +
-          F(" duration=") + sessionProbe_.lastDurationMs() + F("ms lastError=") + sessionProbe_.lastError());
+          F(" taskAge=") + sessionProbe_.lastDurationMs() + F("ms lastError=") + sessionProbe_.lastError());
     n.add(String(F("AP handshake attempts=")) + sessionProbe_.handshakeAttempts() + F(" ok=") + sessionProbe_.handshakeSuccesses() +
           F(" clientHello=") + sessionProbe_.clientHelloBytes() + F(" apHello=") + sessionProbe_.apHelloBytes() +
           F(" dh=") + sessionProbe_.dhSharedBytes() + F(" challenge=") + sessionProbe_.challengeResponseBytes());
@@ -192,11 +198,22 @@ public:
           F(" macFail=") + sessionProbe_.shannonMacFailures());
     n.add(String(F("AP auth attempts=")) + sessionProbe_.authAttempts() + F(" ok=") + sessionProbe_.authSuccesses() +
           F(" declined=") + sessionProbe_.authDeclines() + F(" request=") + sessionProbe_.authRequestBytes() +
-          F(" response=") + sessionProbe_.authResponseBytes() + F(" lastCmd=0x") + String(sessionProbe_.lastCommand(), HEX));
+          F(" response=") + sessionProbe_.authResponseBytes() + F(" authCmd=0x") + String(sessionProbe_.authLastCommand(), HEX));
+    n.add(String(F("live starts=")) + sessionProbe_.sessionStarts() + F(" uptime=") + sessionProbe_.sessionUptimeMs() +
+          F("ms rx=") + sessionProbe_.rxPackets() + F(" tx=") + sessionProbe_.txPackets() +
+          F(" lastRx=0x") + String(sessionProbe_.lastRxCommand(), HEX) + F(" age=") + sessionProbe_.lastRxAgeMs() + F("ms"));
+    n.add(String(F("keepalive ping=")) + sessionProbe_.pingReceived() + F(" pong=") + sessionProbe_.pongSent() +
+          F(" serverTime=") + sessionProbe_.serverTimestampSeconds() + F(" country=") +
+          (sessionProbe_.countryCode()[0] ? sessionProbe_.countryCode() : "--"));
+    n.add(String(F("Mercury SUB attempts=")) + sessionProbe_.mercurySubAttempts() + F(" ok=") + sessionProbe_.mercurySubResponses() +
+          F(" responses=") + sessionProbe_.mercuryResponses() + F(" events=") + sessionProbe_.mercuryEvents() +
+          F(" seq=") + String(static_cast<uint32_t>(sessionProbe_.mercuryLastSequence())));
+    n.add(String(F("Mercury lastUri=")) + (sessionProbe_.mercuryLastUri()[0] ? sessionProbe_.mercuryLastUri() : "none") +
+          F(" | reconnect attempts=") + sessionProbe_.reconnectAttempts() + F(" ok=") + sessionProbe_.reconnectSuccesses());
     n.add(String(F("AP task attempts=")) + sessionProbe_.attempts() +
           F(" heap=") + sessionProbe_.heapBefore() + F("->") + sessionProbe_.heapAfter() +
           F(" minHeap=") + sessionProbe_.minHeapSeen() + F(" stackMin=") + sessionProbe_.stackMinFree());
-    n.add(F("scope=ClientHello + DH + Shannon + stored-credential AP auth only; Mercury/playback next gate"));
+    n.add(F("scope=persistent Shannon + PING/PONG + country + Mercury remote-user SUB; SPIRC/metadata/playback next gate"));
 
     JsonArray a=user.createNestedArray(F("Spotify audio"));
     const auto t=audio_.telemetry();
@@ -246,7 +263,7 @@ public:
     getJsonValue(top[F("Volume")], vol);
     volume_=(uint8_t)constrain(vol,0,100);
     if (ready_) audio_.setVolume(volume_);
-    if (old && !enabled_) { pcmTest_.stop(); audio_.stopTestTone(); audio_.end(); ready_=false; if (!sessionProbe_.active()) sessionProbe_.reset(); }
+    if (old && !enabled_) { pcmTest_.stop(); audio_.stopTestTone(); audio_.end(); ready_=false; if (sessionProbe_.active()) sessionProbe_.requestStop(); else sessionProbe_.reset(); }
     if (!old && enabled_) { initPending_=true; initSince_=millis(); }
     return true;
   }

@@ -1,6 +1,6 @@
 # WLED Spotify Connect Usermod
 
-Current development build: **v0.1.0-dev.2e-ap-auth-r2**
+Current development build: **v0.1.0-dev.2f-mercury-session-r1**
 
 Target baseline: WLED 17.0.0-devV5 / `ESP32-S3_Waveshare_HUB75` on the
 Waveshare ESP32-S3 RGB Matrix board.
@@ -134,3 +134,8 @@ compile still has to run in the actual WLED/PlatformIO build tree.
 - `docs/NEXT_DEV2_CSPOT.md` — next work after `APWelcome` is qualified.
 - `THIRD_PARTY_NOTICES.md` — protocol/cryptographic references and licensing
   notes.
+
+
+## dev.2f-r1
+
+Adds persistent authenticated Shannon session, PING/PONG handling, country capture and the first minimal Mercury remote-user subscription gate. See `docs/DEV2F_MERCURY_SESSION.md`.

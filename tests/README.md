@@ -24,3 +24,7 @@ Manual real-hardware qualification matrix. It records the test type, procedure, 
 `hardware_checks.tsv` is the single current hardware qualification checklist.
 Legacy free-form checklists are intentionally not kept in `tools/` so test
 expectations have one authoritative location.
+
+
+### dev.2f-r1
+`test_dev2f_session_contract.py` validates the persistent Shannon keepalive and minimal Mercury envelope/subscription markers. Hardware persistence, PING/PONG, Mercury SUB and reconnect remain explicit manual/JSON gates in `hardware_checks.tsv`.

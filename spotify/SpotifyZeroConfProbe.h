@@ -40,6 +40,7 @@ public:
   uint32_t authDecodeAttempts() const { return loginBlob_.decodeAttempts(); }
   uint32_t authDecodeSuccesses() const { return loginBlob_.decodeSuccesses(); }
   uint32_t authPersistSuccesses() const { return loginBlob_.persistSuccesses(); }
+  uint32_t authPersistSkips() const { return loginBlob_.persistSkips(); }
   const char* authStage() const { return loginBlob_.diagnosticStageName(); }
   const char* authLastResult() const { return loginBlob_.lastResultName(); }
   size_t authInputUserBytes() const { return loginBlob_.inputUserNameBytes(); }

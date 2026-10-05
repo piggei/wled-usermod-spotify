@@ -5,14 +5,13 @@
 #include <freertos/task.h>
 #include <vector>
 
-// dev.2e-r2 AP authentication gate.
+// dev.2f-r1 persistent AP/Shannon + Mercury session gate.
 //
-// The qualified dev.2e-r1c AP resolver/TCP transport is retained and extended
-// only far enough to prove a real Spotify AP session using the reusable
-// credential qualified in dev.2d-r4:
-//   ClientHello -> APResponse/DH -> Shannon keys -> LOGIN_REQUEST -> APWelcome.
-// The socket is intentionally closed after authentication. Mercury, Spirc,
-// metadata, audio-key retrieval, track decode and playback are later gates.
+// Qualified dev.2e-r2 handshake/authentication is retained. After APWelcome the
+// socket stays open, Spotify PING packets are acknowledged, country code is
+// captured, and a minimal Mercury SUB is sent for hm://remote/3/user/<user>/.
+// No SPIRC, metadata decode, audio keys, track decode or Spotify PCM playback
+// are introduced in this gate.
 class SpotifySessionProbe {
 public:
   enum class State : uint8_t {
@@ -27,6 +26,10 @@ public:
     KeyDerivation,
     Authenticating,
     Authenticated,
+    MercurySubscribing,
+    SessionActive,
+    Reconnecting,
+    Stopping,
     AuthDeclined,
     Failed
   };
@@ -37,10 +40,14 @@ public:
             const std::vector<uint8_t>& authData, const char* deviceId);
   bool startNow(const String& userName, uint8_t authType,
                 const std::vector<uint8_t>& authData, const char* deviceId);
+  void requestStop();
   void reset();
 
   bool active() const { return task_ != nullptr; }
-  bool authenticated() const { return state_ == State::Authenticated; }
+  bool authenticated() const {
+    return state_ == State::Authenticated || state_ == State::MercurySubscribing ||
+           state_ == State::SessionActive;
+  }
   State state() const { return state_; }
   const char* stateName() const;
   const char* endpoint() const { return endpoint_; }
@@ -70,24 +77,50 @@ public:
   uint32_t authDeclines() const { return authDeclines_; }
   size_t authRequestBytes() const { return authRequestBytes_; }
   size_t authResponseBytes() const { return authResponseBytes_; }
-  uint8_t lastCommand() const { return lastCommand_; }
+  uint8_t authLastCommand() const { return authLastCommand_; }
   uint32_t shannonMacFailures() const { return shannonMacFailures_; }
 
-  uint32_t lastDurationMs() const { return lastDurationMs_; }
+  uint32_t sessionStarts() const { return sessionStarts_; }
+  uint32_t sessionUptimeMs() const;
+  uint32_t rxPackets() const { return rxPackets_; }
+  uint32_t txPackets() const { return txPackets_; }
+  uint8_t lastRxCommand() const { return lastRxCommand_; }
+  uint32_t lastRxAgeMs() const;
+  uint32_t pingReceived() const { return pingReceived_; }
+  uint32_t pongSent() const { return pongSent_; }
+  uint32_t serverTimestampSeconds() const { return serverTimestampSeconds_; }
+  const char* countryCode() const { return countryCode_; }
+
+  uint32_t mercurySubAttempts() const { return mercurySubAttempts_; }
+  uint32_t mercurySubResponses() const { return mercurySubResponses_; }
+  uint32_t mercuryResponses() const { return mercuryResponses_; }
+  uint32_t mercuryEvents() const { return mercuryEvents_; }
+  uint64_t mercuryLastSequence() const { return mercuryLastSequence_; }
+  const char* mercuryLastUri() const { return mercuryLastUri_; }
+
+  uint32_t reconnectAttempts() const { return reconnectAttempts_; }
+  uint32_t reconnectSuccesses() const { return reconnectSuccesses_; }
+
+  uint32_t lastDurationMs() const;
   uint32_t heapBefore() const { return heapBefore_; }
-  uint32_t heapAfter() const { return heapAfter_; }
-  uint32_t minHeapSeen() const { return minHeapSeen_; }
+  uint32_t heapAfter() const { return active() ? ESP.getFreeHeap() : heapAfter_; }
+  uint32_t minHeapSeen() const { return ESP.getMinFreeHeap(); }
   UBaseType_t stackMinFree() const { return stackMinFree_; }
 
 private:
   static constexpr uint32_t AUTO_DELAY_MS = 3500u;
   static constexpr uint32_t CONNECT_TIMEOUT_MS = 5000u;
   static constexpr uint32_t IO_TIMEOUT_MS = 7000u;
+  static constexpr uint32_t SESSION_POLL_MS = 250u;
+  static constexpr uint32_t SESSION_RX_TIMEOUT_MS = 130000u;
+  static constexpr uint32_t RECONNECT_DELAY_MS = 2500u;
+  static constexpr uint32_t MAX_AUTO_RECONNECTS = 5u;
   static constexpr size_t MAX_AP_PLAIN_PACKET = 16384u;
   static constexpr size_t MAX_AP_ENCRYPTED_PACKET = 8192u;
 
   static void taskThunk(void* arg);
   void taskLoop();
+  bool runOneSession(bool reconnecting);
   bool resolveAccessPoint(String& endpoint);
   bool resolveWithHttp(String& endpoint);
   static bool extractFirstEndpoint(const String& json, const char* key, String& endpoint);
@@ -96,11 +129,14 @@ private:
   void setEndpoint(const String& endpoint);
   void setResolverMode(const char* mode);
   void finishTask(uint32_t startedMs);
+  void updateStackWatermark();
 
   volatile State state_ = State::Idle;
   TaskHandle_t task_ = nullptr;
+  volatile bool stopRequested_ = false;
   bool autoAttempted_ = false;
   uint32_t eligibleSinceMs_ = 0u;
+  uint32_t taskStartedMs_ = 0u;
 
   String credentialUser_;
   std::vector<uint8_t> credentialAuthData_;
@@ -130,13 +166,35 @@ private:
   uint32_t authDeclines_ = 0u;
   size_t authRequestBytes_ = 0u;
   size_t authResponseBytes_ = 0u;
-  uint8_t lastCommand_ = 0u;
+  uint8_t authLastCommand_ = 0u;
   uint32_t shannonMacFailures_ = 0u;
+
+  uint32_t sessionStarts_ = 0u;
+  uint32_t sessionConnectedMs_ = 0u;
+  uint32_t lastRxMs_ = 0u;
+  uint32_t rxPackets_ = 0u;
+  uint32_t txPackets_ = 0u;
+  uint8_t lastRxCommand_ = 0u;
+  uint32_t pingReceived_ = 0u;
+  uint32_t pongSent_ = 0u;
+  uint32_t serverTimestampSeconds_ = 0u;
+  char countryCode_[3] = {0};
+
+  uint64_t mercurySequence_ = 0u;
+  uint64_t mercurySubscriptionSequence_ = ~static_cast<uint64_t>(0);
+  uint32_t mercurySubAttempts_ = 0u;
+  uint32_t mercurySubResponses_ = 0u;
+  uint32_t mercuryResponses_ = 0u;
+  uint32_t mercuryEvents_ = 0u;
+  uint64_t mercuryLastSequence_ = 0u;
+  char mercuryLastUri_[128] = {0};
+
+  uint32_t reconnectAttempts_ = 0u;
+  uint32_t reconnectSuccesses_ = 0u;
 
   uint32_t lastDurationMs_ = 0u;
   uint32_t heapBefore_ = 0u;
   uint32_t heapAfter_ = 0u;
-  uint32_t minHeapSeen_ = 0u;
   UBaseType_t stackMinFree_ = 0u;
 
   char endpoint_[96] = {0};

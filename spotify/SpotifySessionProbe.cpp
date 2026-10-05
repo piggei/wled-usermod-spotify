@@ -30,6 +30,13 @@ constexpr uint64_t SPOTIFY_VERSION = 0x10800000000ULL;
 constexpr uint8_t LOGIN_REQUEST_COMMAND = 0xABu;
 constexpr uint8_t AUTH_SUCCESSFUL_COMMAND = 0xACu;
 constexpr uint8_t AUTH_DECLINED_COMMAND = 0xADu;
+constexpr uint8_t PING_COMMAND = 0x04u;
+constexpr uint8_t PONG_COMMAND = 0x49u;
+constexpr uint8_t COUNTRY_CODE_COMMAND = 0x1Bu;
+constexpr uint8_t MERCURY_SEND_COMMAND = 0xB2u;
+constexpr uint8_t MERCURY_SUB_COMMAND = 0xB3u;
+constexpr uint8_t MERCURY_UNSUB_COMMAND = 0xB4u;
+constexpr uint8_t MERCURY_EVENT_COMMAND = 0xB5u;
 
 bool sha1Digest(const uint8_t* data, size_t size, uint8_t out[SHA1_BYTES]) {
   if (!out || (!data && size != 0u)) return false;
@@ -409,13 +416,105 @@ bool recvShannonPacket(WiFiClient& client, SpotifyShannon& cipher, uint32_t& non
   cipher.nonce(shannonNonce(nonceCounter));
   return true;
 }
+
+void appendBe64(std::vector<uint8_t>& out, uint64_t value) {
+  for (int shift = 56; shift >= 0; shift -= 8)
+    out.push_back(static_cast<uint8_t>(value >> static_cast<unsigned int>(shift)));
+}
+
+uint16_t readBe16At(const std::vector<uint8_t>& data, size_t offset) {
+  if (offset + 2u > data.size()) return 0u;
+  return static_cast<uint16_t>((static_cast<uint16_t>(data[offset]) << 8u) | data[offset + 1u]);
+}
+
+uint64_t readBe64At(const std::vector<uint8_t>& data, size_t offset, size_t length) {
+  uint64_t value = 0u;
+  const size_t take = std::min<size_t>(length, 8u);
+  for (size_t i = 0u; i < take && offset + i < data.size(); ++i)
+    value = (value << 8u) | data[offset + i];
+  return value;
+}
+
+bool extractProtoString(const uint8_t* data, size_t size, uint32_t wantedField, String& out) {
+  size_t offset = 0u;
+  while (offset < size) {
+    uint64_t key = 0u;
+    if (!readVarint(data, size, offset, key)) return false;
+    const uint32_t field = static_cast<uint32_t>(key >> 3u);
+    const uint8_t wire = static_cast<uint8_t>(key & 7u);
+    if (wire == 2u) {
+      uint64_t len = 0u;
+      if (!readVarint(data, size, offset, len) || len > size - offset) return false;
+      if (field == wantedField) {
+        out = String();
+        out.reserve(static_cast<unsigned int>(len));
+        for (size_t i = 0u; i < static_cast<size_t>(len); ++i)
+          out += static_cast<char>(data[offset + i]);
+        return true;
+      }
+      offset += static_cast<size_t>(len);
+    } else if (wire == 0u) {
+      uint64_t ignored = 0u;
+      if (!readVarint(data, size, offset, ignored)) return false;
+    } else if (wire == 1u) {
+      if (size - offset < 8u) return false;
+      offset += 8u;
+    } else if (wire == 5u) {
+      if (size - offset < 4u) return false;
+      offset += 4u;
+    } else {
+      return false;
+    }
+  }
+  return false;
+}
+
+std::vector<uint8_t> buildMercuryRequest(uint64_t sequence, const String& method,
+                                         const String& uri) {
+  std::vector<uint8_t> header;
+  appendStringField(header, 1u, uri);
+  appendStringField(header, 3u, method);
+
+  std::vector<uint8_t> out;
+  out.reserve(15u + header.size());
+  appendBe16(out, 8u);                 // sequence byte count
+  appendBe64(out, sequence);
+  out.push_back(0x01u);                // final fragment
+  appendBe16(out, 1u);                 // header is the only part
+  appendBe16(out, static_cast<uint16_t>(header.size()));
+  out.insert(out.end(), header.begin(), header.end());
+  return out;
+}
+
+bool parseMercuryEnvelope(const std::vector<uint8_t>& data, uint64_t& sequence,
+                          String& uri, String& method) {
+  if (data.size() < 7u) return false;
+  const size_t sequenceBytes = readBe16At(data, 0u);
+  if (sequenceBytes == 0u || sequenceBytes > 8u || data.size() < 2u + sequenceBytes + 5u)
+    return false;
+  sequence = readBe64At(data, 2u, sequenceBytes);
+  size_t offset = 2u + sequenceBytes;
+  offset += 1u; // flags/final-fragment byte
+  if (offset + 4u > data.size()) return false;
+  const uint16_t partCount = readBe16At(data, offset);
+  offset += 2u;
+  const uint16_t headerSize = readBe16At(data, offset);
+  offset += 2u;
+  if (partCount == 0u || headerSize > data.size() - offset) return false;
+  const uint8_t* header = data.data() + offset;
+  extractProtoString(header, headerSize, 1u, uri);
+  extractProtoString(header, headerSize, 3u, method);
+  return true;
+}
 }
 
 void SpotifySessionProbe::begin() {
   state_ = State::Idle;
   task_ = nullptr;
+  stopRequested_ = false;
   autoAttempted_ = false;
   eligibleSinceMs_ = 0u;
+  taskStartedMs_ = 0u;
   setEndpoint(String());
   setResolverMode("none");
   setError("none");
@@ -434,10 +533,29 @@ const char* SpotifySessionProbe::stateName() const {
     case State::KeyDerivation: return "key-derivation";
     case State::Authenticating: return "authenticating";
     case State::Authenticated: return "authenticated";
+    case State::MercurySubscribing: return "mercury-subscribing";
+    case State::SessionActive: return "session-active";
+    case State::Reconnecting: return "reconnecting";
+    case State::Stopping: return "stopping";
     case State::AuthDeclined: return "auth-declined";
     case State::Failed: return "failed";
   }
   return "unknown";
+}
+
+uint32_t SpotifySessionProbe::sessionUptimeMs() const {
+  if (sessionConnectedMs_ == 0u) return 0u;
+  return millis() - sessionConnectedMs_;
+}
+
+uint32_t SpotifySessionProbe::lastRxAgeMs() const {
+  if (lastRxMs_ == 0u) return 0u;
+  return millis() - lastRxMs_;
+}
+
+uint32_t SpotifySessionProbe::lastDurationMs() const {
+  if (active() && taskStartedMs_ != 0u) return millis() - taskStartedMs_;
+  return lastDurationMs_;
 }
 
 void SpotifySessionProbe::setError(const char* text) {
@@ -452,12 +570,19 @@ void SpotifySessionProbe::setResolverMode(const char* mode) {
   strlcpy(resolverMode_, mode ? mode : "none", sizeof(resolverMode_));
 }
 
+void SpotifySessionProbe::updateStackWatermark() {
+  const UBaseType_t now = uxTaskGetStackHighWaterMark(nullptr);
+  if (stackMinFree_ == 0u || now < stackMinFree_) stackMinFree_ = now;
+}
+
 void SpotifySessionProbe::loop(bool enabled, bool credentialsReady,
                                const String& userName, uint8_t authType,
                                const std::vector<uint8_t>& authData, const char* deviceId) {
   if (!enabled) {
     eligibleSinceMs_ = 0u;
-    if (!active()) state_ = State::Idle;
+    autoAttempted_ = false;
+    if (active()) requestStop();
+    else state_ = State::Idle;
     return;
   }
   if (!credentialsReady || userName.length() == 0u || authData.empty()) {
@@ -471,7 +596,8 @@ void SpotifySessionProbe::loop(bool enabled, bool credentialsReady,
     if (!active()) state_ = State::WaitingWifi;
     return;
   }
-  if (active() || autoAttempted_ || state_ == State::Authenticated) return;
+  if (active() || autoAttempted_ || state_ == State::SessionActive || state_ == State::MercurySubscribing)
+    return;
 
   const uint32_t now = millis();
   if (eligibleSinceMs_ == 0u) {
@@ -505,6 +631,7 @@ bool SpotifySessionProbe::startNow(const String& userName, uint8_t authType,
   strlcpy(credentialDeviceId_, deviceId, sizeof(credentialDeviceId_));
 
   ++attempts_;
+  stopRequested_ = false;
   setError("none");
   setEndpoint(String());
   setResolverMode("none");
@@ -518,15 +645,18 @@ bool SpotifySessionProbe::startNow(const String& userName, uint8_t authType,
   shannonRecvKeyBytes_ = 0u;
   authRequestBytes_ = 0u;
   authResponseBytes_ = 0u;
-  lastCommand_ = 0u;
+  authLastCommand_ = 0u;
+  lastRxCommand_ = 0u;
+  sessionConnectedMs_ = 0u;
+  lastRxMs_ = 0u;
   heapBefore_ = ESP.getFreeHeap();
   heapAfter_ = heapBefore_;
-  minHeapSeen_ = ESP.getMinFreeHeap();
   lastDurationMs_ = 0u;
   stackMinFree_ = 0u;
   state_ = State::Resolving;
+  taskStartedMs_ = millis();
 
-  if (xTaskCreate(taskThunk, "spotify_ap_auth", 12288, this, 1, &task_) != pdPASS) {
+  if (xTaskCreate(taskThunk, "spotify_session", 12288, this, 1, &task_) != pdPASS) {
     task_ = nullptr;
     state_ = State::Failed;
     setError("task create failed");
@@ -537,10 +667,18 @@ bool SpotifySessionProbe::startNow(const String& userName, uint8_t authType,
   return true;
 }
 
+void SpotifySessionProbe::requestStop() {
+  if (!active()) return;
+  stopRequested_ = true;
+  state_ = State::Stopping;
+}
+
 void SpotifySessionProbe::reset() {
   if (active()) return;
+  stopRequested_ = false;
   autoAttempted_ = false;
   eligibleSinceMs_ = 0u;
+  taskStartedMs_ = 0u;
   state_ = State::Idle;
   attempts_ = 0u;
   resolveAttempts_ = 0u;
@@ -563,12 +701,31 @@ void SpotifySessionProbe::reset() {
   authDeclines_ = 0u;
   authRequestBytes_ = 0u;
   authResponseBytes_ = 0u;
-  lastCommand_ = 0u;
+  authLastCommand_ = 0u;
   shannonMacFailures_ = 0u;
+  sessionStarts_ = 0u;
+  sessionConnectedMs_ = 0u;
+  lastRxMs_ = 0u;
+  rxPackets_ = 0u;
+  txPackets_ = 0u;
+  lastRxCommand_ = 0u;
+  pingReceived_ = 0u;
+  pongSent_ = 0u;
+  serverTimestampSeconds_ = 0u;
+  memset(countryCode_, 0, sizeof(countryCode_));
+  mercurySequence_ = 0u;
+  mercurySubscriptionSequence_ = ~static_cast<uint64_t>(0);
+  mercurySubAttempts_ = 0u;
+  mercurySubResponses_ = 0u;
+  mercuryResponses_ = 0u;
+  mercuryEvents_ = 0u;
+  mercuryLastSequence_ = 0u;
+  memset(mercuryLastUri_, 0, sizeof(mercuryLastUri_));
+  reconnectAttempts_ = 0u;
+  reconnectSuccesses_ = 0u;
   lastDurationMs_ = 0u;
   heapBefore_ = 0u;
   heapAfter_ = 0u;
-  minHeapSeen_ = 0u;
   stackMinFree_ = 0u;
   setEndpoint(String());
   setResolverMode("none");
@@ -648,49 +805,34 @@ bool SpotifySessionProbe::resolveAccessPoint(String& endpoint) {
 void SpotifySessionProbe::finishTask(uint32_t startedMs) {
   lastDurationMs_ = millis() - startedMs;
   heapAfter_ = ESP.getFreeHeap();
-  minHeapSeen_ = ESP.getMinFreeHeap();
-  stackMinFree_ = uxTaskGetStackHighWaterMark(nullptr);
+  updateStackWatermark();
   std::fill(credentialAuthData_.begin(), credentialAuthData_.end(), 0u);
   credentialAuthData_.clear();
   credentialUser_ = String();
   credentialAuthType_ = 0u;
   memset(credentialDeviceId_, 0, sizeof(credentialDeviceId_));
+  taskStartedMs_ = 0u;
   task_ = nullptr;
 }
 
-void SpotifySessionProbe::taskLoop() {
-  const uint32_t started = millis();
+bool SpotifySessionProbe::runOneSession(bool reconnecting) {
   String endpoint;
   WiFiClient tcp;
 
   state_ = State::Resolving;
-  if (!resolveAccessPoint(endpoint)) {
-    state_ = State::Failed;
-    finishTask(started);
-    vTaskDelete(nullptr);
-    return;
-  }
-
+  if (!resolveAccessPoint(endpoint)) { state_ = State::Failed; return false; }
   setEndpoint(endpoint);
+
   String host;
   uint16_t port = 0u;
   if (!splitEndpoint(endpoint, host, port)) {
-    state_ = State::Failed;
-    setError("invalid AP endpoint");
-    finishTask(started);
-    vTaskDelete(nullptr);
-    return;
+    state_ = State::Failed; setError("invalid AP endpoint"); return false;
   }
 
   state_ = State::Connecting;
   ++tcpAttempts_;
   if (tcp.connect(host.c_str(), port, CONNECT_TIMEOUT_MS) != 1) {
-    tcp.stop();
-    state_ = State::Failed;
-    setError("AP TCP connect failed");
-    finishTask(started);
-    vTaskDelete(nullptr);
-    return;
+    tcp.stop(); state_ = State::Failed; setError("AP TCP connect failed"); return false;
   }
   ++tcpSuccesses_;
 
@@ -699,38 +841,33 @@ void SpotifySessionProbe::taskLoop() {
   std::vector<uint8_t> privateKey;
   std::vector<uint8_t> publicKey;
   if (!generateDhKeyPair(privateKey, publicKey)) {
-    tcp.stop(); state_ = State::Failed; setError("AP DH key generation failed");
-    finishTask(started); vTaskDelete(nullptr); return;
+    tcp.stop(); state_ = State::Failed; setError("AP DH key generation failed"); return false;
   }
 
   const std::vector<uint8_t> helloProto = buildClientHello(publicKey);
   const std::vector<uint8_t> helloPacket = makePlainFrame({0x00u, 0x04u}, helloProto);
   clientHelloBytes_ = helloPacket.size();
   if (!writeAll(tcp, helloPacket.data(), helloPacket.size(), IO_TIMEOUT_MS)) {
-    tcp.stop(); state_ = State::Failed; setError("ClientHello write failed");
-    finishTask(started); vTaskDelete(nullptr); return;
+    tcp.stop(); state_ = State::Failed; setError("ClientHello write failed"); return false;
   }
 
   state_ = State::ApHello;
   std::vector<uint8_t> apFrame;
   std::vector<uint8_t> apBody;
   if (!readPlainApFrame(tcp, MAX_AP_PLAIN_PACKET, IO_TIMEOUT_MS, apFrame, apBody)) {
-    tcp.stop(); state_ = State::Failed; setError("APResponse read failed");
-    finishTask(started); vTaskDelete(nullptr); return;
+    tcp.stop(); state_ = State::Failed; setError("APResponse read failed"); return false;
   }
   apHelloBytes_ = apFrame.size();
 
   std::vector<uint8_t> peerKey;
   if (!parseApDhPublicKey(apBody, peerKey)) {
-    tcp.stop(); state_ = State::Failed; setError("APResponse DH key missing");
-    finishTask(started); vTaskDelete(nullptr); return;
+    tcp.stop(); state_ = State::Failed; setError("APResponse DH key missing"); return false;
   }
 
   state_ = State::KeyDerivation;
   std::vector<uint8_t> sharedKey;
   if (!calculateDhShared(privateKey, peerKey, sharedKey)) {
-    tcp.stop(); state_ = State::Failed; setError("AP DH shared key failed");
-    finishTask(started); vTaskDelete(nullptr); return;
+    tcp.stop(); state_ = State::Failed; setError("AP DH shared key failed"); return false;
   }
   std::fill(privateKey.begin(), privateKey.end(), 0u);
   privateKey.clear();
@@ -748,8 +885,7 @@ void SpotifySessionProbe::taskLoop() {
     one.push_back(counter);
     uint8_t digest[SHA1_BYTES];
     if (!hmacSha1(sharedKey.data(), sharedKey.size(), one.data(), one.size(), digest)) {
-      tcp.stop(); state_ = State::Failed; setError("AP challenge HMAC failed");
-      finishTask(started); vTaskDelete(nullptr); return;
+      tcp.stop(); state_ = State::Failed; setError("AP challenge HMAC failed"); return false;
     }
     resultData.insert(resultData.end(), digest, digest + sizeof(digest));
   }
@@ -757,15 +893,12 @@ void SpotifySessionProbe::taskLoop() {
   sharedKey.clear();
 
   if (resultData.size() < 84u) {
-    tcp.stop(); state_ = State::Failed; setError("AP challenge key material short");
-    finishTask(started); vTaskDelete(nullptr); return;
+    tcp.stop(); state_ = State::Failed; setError("AP challenge key material short"); return false;
   }
 
   uint8_t challengeHmac[SHA1_BYTES];
-  if (!hmacSha1(resultData.data(), SHA1_BYTES,
-                 challengeData.data(), challengeData.size(), challengeHmac)) {
-    tcp.stop(); state_ = State::Failed; setError("AP response HMAC failed");
-    finishTask(started); vTaskDelete(nullptr); return;
+  if (!hmacSha1(resultData.data(), SHA1_BYTES, challengeData.data(), challengeData.size(), challengeHmac)) {
+    tcp.stop(); state_ = State::Failed; setError("AP response HMAC failed"); return false;
   }
 
   std::vector<uint8_t> sendKey(resultData.begin() + 20, resultData.begin() + 52);
@@ -779,8 +912,7 @@ void SpotifySessionProbe::taskLoop() {
   challengeResponseBytes_ = challengeResponse.size();
   const std::vector<uint8_t> responseFrame = makePlainFrame({}, challengeResponse);
   if (!writeAll(tcp, responseFrame.data(), responseFrame.size(), IO_TIMEOUT_MS)) {
-    tcp.stop(); state_ = State::Failed; setError("ClientResponsePlaintext write failed");
-    finishTask(started); vTaskDelete(nullptr); return;
+    tcp.stop(); state_ = State::Failed; setError("ClientResponsePlaintext write failed"); return false;
   }
   ++handshakeSuccesses_;
 
@@ -800,11 +932,9 @@ void SpotifySessionProbe::taskLoop() {
   std::vector<uint8_t> authRequest = buildAuthRequest(
       credentialUser_, credentialAuthType_, credentialAuthData_, credentialDeviceId_);
   authRequestBytes_ = authRequest.size();
-  if (!sendShannonPacket(tcp, sendCipher, sendNonce, LOGIN_REQUEST_COMMAND,
-                         authRequest, IO_TIMEOUT_MS)) {
+  if (!sendShannonPacket(tcp, sendCipher, sendNonce, LOGIN_REQUEST_COMMAND, authRequest, IO_TIMEOUT_MS)) {
     std::fill(authRequest.begin(), authRequest.end(), 0u);
-    tcp.stop(); state_ = State::Failed; setError("Shannon login write failed");
-    finishTask(started); vTaskDelete(nullptr); return;
+    tcp.stop(); state_ = State::Failed; setError("Shannon login write failed"); return false;
   }
   std::fill(authRequest.begin(), authRequest.end(), 0u);
   authRequest.clear();
@@ -814,31 +944,181 @@ void SpotifySessionProbe::taskLoop() {
   uint8_t command = 0u;
   if (!recvShannonPacket(tcp, recvCipher, recvNonce, MAX_AP_ENCRYPTED_PACKET,
                          IO_TIMEOUT_MS, command, authResponse, macOk)) {
-    tcp.stop(); state_ = State::Failed; setError("Shannon auth response read failed");
-    finishTask(started); vTaskDelete(nullptr); return;
+    tcp.stop(); state_ = State::Failed; setError("Shannon auth response read failed"); return false;
   }
-  lastCommand_ = command;
+  authLastCommand_ = command;
   authResponseBytes_ = authResponse.size();
   if (!macOk) {
     ++shannonMacFailures_;
-    tcp.stop(); state_ = State::Failed; setError("Shannon MAC mismatch");
-    finishTask(started); vTaskDelete(nullptr); return;
+    tcp.stop(); state_ = State::Failed; setError("Shannon MAC mismatch"); return false;
+  }
+  if (command == AUTH_DECLINED_COMMAND) {
+    ++authDeclines_;
+    tcp.stop(); state_ = State::AuthDeclined; setError("AP authorization declined"); return false;
+  }
+  if (command != AUTH_SUCCESSFUL_COMMAND) {
+    tcp.stop(); state_ = State::Failed; setError("unexpected AP auth command"); return false;
   }
 
-  if (command == AUTH_SUCCESSFUL_COMMAND) {
-    ++authSuccesses_;
-    state_ = State::Authenticated;
-    setError("none");
-  } else if (command == AUTH_DECLINED_COMMAND) {
-    ++authDeclines_;
-    state_ = State::AuthDeclined;
-    setError("AP authorization declined");
-  } else {
-    state_ = State::Failed;
-    setError("unexpected AP auth command");
+  ++authSuccesses_;
+  ++sessionStarts_;
+  if (reconnecting) ++reconnectSuccesses_;
+  state_ = State::Authenticated;
+  setError("none");
+  sessionConnectedMs_ = millis();
+  lastRxMs_ = sessionConnectedMs_;
+  updateStackWatermark();
+
+  // Minimal Mercury gate. Current embedded cspot interoperability references use
+  // hm://remote/3/user/<user>/.  We wait for Spotify's first authenticated PING
+  // before sending SUB, mirroring the observed AP startup ordering: APWelcome,
+  // PING/PONG time sync, then Mercury subscription.
+  const String subscriptionUri = String(F("hm://remote/3/user/")) + credentialUser_ + F("/");
+  bool subscriptionSent = false;
+
+  while (!stopRequested_) {
+    if (WiFi.status() != WL_CONNECTED) {
+      tcp.stop(); state_ = State::Failed; setError("WiFi lost during Spotify session"); return false;
+    }
+
+    if (tcp.available() <= 0) {
+      if (!tcp.connected()) {
+        tcp.stop(); state_ = State::Failed; setError("Spotify AP closed session"); return false;
+      }
+      if (lastRxMs_ != 0u && millis() - lastRxMs_ > SESSION_RX_TIMEOUT_MS) {
+        tcp.stop(); state_ = State::Failed; setError("Spotify session RX timeout"); return false;
+      }
+      updateStackWatermark();
+      delay(SESSION_POLL_MS);
+      continue;
+    }
+
+    std::vector<uint8_t> payload;
+    bool liveMacOk = false;
+    uint8_t liveCommand = 0u;
+    if (!recvShannonPacket(tcp, recvCipher, recvNonce, MAX_AP_ENCRYPTED_PACKET,
+                           IO_TIMEOUT_MS, liveCommand, payload, liveMacOk)) {
+      tcp.stop(); state_ = State::Failed; setError("Spotify session packet read failed"); return false;
+    }
+    ++rxPackets_;
+    lastRxCommand_ = liveCommand;
+    lastRxMs_ = millis();
+    if (!liveMacOk) {
+      ++shannonMacFailures_;
+      tcp.stop(); state_ = State::Failed; setError("Shannon live MAC mismatch"); return false;
+    }
+
+    if (liveCommand == PING_COMMAND) {
+      ++pingReceived_;
+      if (payload.size() >= 4u) {
+        serverTimestampSeconds_ = (static_cast<uint32_t>(payload[0]) << 24u) |
+                                  (static_cast<uint32_t>(payload[1]) << 16u) |
+                                  (static_cast<uint32_t>(payload[2]) << 8u) |
+                                  static_cast<uint32_t>(payload[3]);
+      }
+      if (!sendShannonPacket(tcp, sendCipher, sendNonce, PONG_COMMAND, payload, IO_TIMEOUT_MS)) {
+        tcp.stop(); state_ = State::Failed; setError("Spotify PONG write failed"); return false;
+      }
+      ++pongSent_;
+      ++txPackets_;
+
+      if (!subscriptionSent) {
+        state_ = State::MercurySubscribing;
+        mercurySubscriptionSequence_ = mercurySequence_++;
+        const std::vector<uint8_t> subRequest = buildMercuryRequest(
+            mercurySubscriptionSequence_, String(F("SUB")), subscriptionUri);
+        ++mercurySubAttempts_;
+        if (!sendShannonPacket(tcp, sendCipher, sendNonce, MERCURY_SUB_COMMAND,
+                               subRequest, IO_TIMEOUT_MS)) {
+          tcp.stop(); state_ = State::Failed; setError("Mercury SUB write failed"); return false;
+        }
+        subscriptionSent = true;
+        ++txPackets_;
+      }
+
+      if (mercurySubResponses_ > 0u) state_ = State::SessionActive;
+      continue;
+    }
+
+    if (liveCommand == COUNTRY_CODE_COMMAND && payload.size() >= 2u) {
+      countryCode_[0] = static_cast<char>(payload[0]);
+      countryCode_[1] = static_cast<char>(payload[1]);
+      countryCode_[2] = '\0';
+      continue;
+    }
+
+    if (liveCommand == MERCURY_SEND_COMMAND || liveCommand == MERCURY_SUB_COMMAND ||
+        liveCommand == MERCURY_UNSUB_COMMAND || liveCommand == MERCURY_EVENT_COMMAND) {
+      uint64_t sequence = 0u;
+      String uri, method;
+      if (parseMercuryEnvelope(payload, sequence, uri, method)) {
+        mercuryLastSequence_ = sequence;
+        if (uri.length() != 0u) strlcpy(mercuryLastUri_, uri.c_str(), sizeof(mercuryLastUri_));
+        if (liveCommand == MERCURY_EVENT_COMMAND) {
+          ++mercuryEvents_;
+          // Spotify delivers subscription traffic on 0xB5. Treat the first
+          // event for our remote-user URI as proof that the SUB is active.
+          if (subscriptionSent && uri == subscriptionUri) {
+            ++mercurySubResponses_;
+            state_ = State::SessionActive;
+          }
+        } else {
+          ++mercuryResponses_;
+          // Some AP implementations can acknowledge the SUB directly on 0xB3.
+          if (liveCommand == MERCURY_SUB_COMMAND && sequence == mercurySubscriptionSequence_) {
+            ++mercurySubResponses_;
+            state_ = State::SessionActive;
+          }
+        }
+      }
+      continue;
+    }
   }
 
   tcp.stop();
+  state_ = State::Stopping;
+  setError("none");
+  return true;
+}
+
+void SpotifySessionProbe::taskLoop() {
+  const uint32_t started = millis();
+  uint32_t reconnectsUsed = 0u;
+  bool reconnecting = false;
+
+  while (!stopRequested_) {
+    if (reconnecting) {
+      state_ = State::Reconnecting;
+
+      // A Wi-Fi outage must not burn through the bounded AP reconnect budget.
+      // Wait for WLED networking to recover first, then count an AP attempt.
+      while (!stopRequested_ && WiFi.status() != WL_CONNECTED) {
+        updateStackWatermark();
+        delay(250);
+      }
+      if (stopRequested_) break;
+
+      if (reconnectsUsed >= MAX_AUTO_RECONNECTS) {
+        state_ = State::Failed;
+        setError("Spotify reconnect limit reached");
+        break;
+      }
+      ++reconnectAttempts_;
+      ++reconnectsUsed;
+      const uint32_t waitStart = millis();
+      while (!stopRequested_ && millis() - waitStart < RECONNECT_DELAY_MS) delay(25);
+      if (stopRequested_) break;
+    }
+
+    const bool graceful = runOneSession(reconnecting);
+    if (stopRequested_ || graceful) break;
+    reconnecting = true;
+  }
+
+  if (stopRequested_) {
+    state_ = State::Idle;
+    setError("none");
+  }
   finishTask(started);
   vTaskDelete(nullptr);
 }
