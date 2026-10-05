@@ -9,8 +9,8 @@
 
 class UsermodSpotifyConnect : public Usermod {
 private:
-  static constexpr const char* USERMOD_VERSION = "0.1.0-dev.2f-mercury-session";
-  static constexpr const char* USERMOD_REVISION = "r1";
+  static constexpr const char* USERMOD_VERSION = "0.1.0-dev.2g-spirc-activation";
+  static constexpr const char* USERMOD_REVISION = "r3";
   bool enabled_ = false;
   bool ready_ = false;
   bool initPending_ = false;
@@ -77,11 +77,11 @@ public:
           request->send(409, FPSTR(CONTENT_TYPE_PLAIN), F("No cached Spotify credential; pair through Spotify first"));
           return;
         }
-        if (!sessionProbe_.startNow(zeroConf_.userName(), zeroConf_.authType(), zeroConf_.authData(), zeroConf_.deviceId())) {
+        if (!sessionProbe_.startNow(zeroConf_.userName(), zeroConf_.authType(), zeroConf_.authData(), zeroConf_.deviceId(), deviceName_, volume_)) {
           request->send(409, FPSTR(CONTENT_TYPE_PLAIN), String(F("Spotify session not started: state=")) + sessionProbe_.stateName() + F(" error=") + sessionProbe_.lastError());
           return;
         }
-        request->send(202, FPSTR(CONTENT_TYPE_PLAIN), F("Spotify persistent AP/Mercury session started; inspect /json/info"));
+        request->send(202, FPSTR(CONTENT_TYPE_PLAIN), F("Spotify persistent AP/Mercury/SPIRC activation session started; inspect /json/info"));
         return;
       }
       if (action == "stop") {
@@ -140,7 +140,7 @@ public:
   }
 
   void loop() override {
-    sessionProbe_.loop(enabled_, zeroConf_.credentialsReady(), zeroConf_.userName(), zeroConf_.authType(), zeroConf_.authData(), zeroConf_.deviceId());
+    sessionProbe_.loop(enabled_, zeroConf_.credentialsReady(), zeroConf_.userName(), zeroConf_.authType(), zeroConf_.authData(), zeroConf_.deviceId(), deviceName_, volume_);
     if (!enabled_) return;
     zeroConf_.loop(deviceName_);
     if (initPending_ && millis()-initSince_ > 2500u) {
@@ -159,7 +159,7 @@ public:
     if (!enabled_) s.add(F("disabled"));
     else if (!ready_ && selectClockMode() == ClockMode::WaitingSharedClock) s.add(F("waiting: AudioReactive owns clocks but LRCK inactive"));
     else if (!ready_) s.add(String(F("audio not ready: "))+audio_.lastError());
-    else s.add(F("audio ready | Spotify persistent Shannon/Mercury gate"));
+    else s.add(F("audio ready | Spotify SPIRC transfer-ack gate"));
 
     JsonArray z=user.createNestedArray(F("Spotify Zeroconf"));
     z.add(String(F("state=")) + zeroConf_.stateName() + F(" | cpath=") + zeroConf_.cpath());
@@ -210,10 +210,30 @@ public:
           F(" seq=") + String(static_cast<uint32_t>(sessionProbe_.mercuryLastSequence())));
     n.add(String(F("Mercury lastUri=")) + (sessionProbe_.mercuryLastUri()[0] ? sessionProbe_.mercuryLastUri() : "none") +
           F(" | reconnect attempts=") + sessionProbe_.reconnectAttempts() + F(" ok=") + sessionProbe_.reconnectSuccesses());
+    n.add(String(F("SPIRC hello attempts=")) + sessionProbe_.spircHelloAttempts() + F(" sent=") + sessionProbe_.spircHelloSent() +
+          F(" ack=") + sessionProbe_.spircHelloAcks() + F(" bytes=") + sessionProbe_.spircHelloBytes());
+    n.add(String(F("SPIRC URI root=")) + sessionProbe_.spircUriRootEvents() + F(" child=") + sessionProbe_.spircUriChildEvents() +
+          F(" | rxRead stage=") + sessionProbe_.lastReadStage() + F(" declared=") + sessionProbe_.lastReadDeclaredPayload() +
+          F(" max=16384 oversize=") + sessionProbe_.oversizedPackets());
+    n.add(String(F("SPIRC rx=")) + sessionProbe_.spircRxFrames() + F(" remote=") + sessionProbe_.spircRemoteFrames() +
+          F(" selfEcho=") + sessionProbe_.spircSelfEchoes() + F(" notify=") + sessionProbe_.spircNotifyFrames() +
+          F(" load=") + sessionProbe_.spircLoadFrames() + F(" play=") + sessionProbe_.spircPlayFrames() +
+          F(" pause=") + sessionProbe_.spircPauseFrames() + F(" lastType=0x") + String(sessionProbe_.spircLastType(), HEX) +
+          F(" active=") + (sessionProbe_.spircRemoteActive() ? F("yes") : F("no")));
+    n.add(String(F("SPIRC transfer Notify attempts=")) + sessionProbe_.spircTransferNotifyAttempts() +
+          F(" sent=") + sessionProbe_.spircTransferNotifySent() + F(" ack=") + sessionProbe_.spircTransferNotifyAcks() +
+          F(" bytes=") + sessionProbe_.spircTransferNotifyBytes() + F(" localActive=") +
+          (sessionProbe_.spircLocalActive() ? F("yes") : F("no")));
+    n.add(String(F("SPIRC Load tracks=")) + sessionProbe_.spircLastLoadTrackCount() +
+          F(" position=") + sessionProbe_.spircLastLoadPositionMs() + F(" remoteStatus=") +
+          sessionProbe_.spircLastLoadStatus() + F(" context=") +
+          (sessionProbe_.spircLastLoadContext()[0] ? sessionProbe_.spircLastLoadContext() : "none"));
+    n.add(String(F("SPIRC remote ident=")) + (sessionProbe_.spircRemoteIdent()[0] ? sessionProbe_.spircRemoteIdent() : "none") +
+          F(" name=") + (sessionProbe_.spircRemoteName()[0] ? sessionProbe_.spircRemoteName() : "none"));
     n.add(String(F("AP task attempts=")) + sessionProbe_.attempts() +
           F(" heap=") + sessionProbe_.heapBefore() + F("->") + sessionProbe_.heapAfter() +
           F(" minHeap=") + sessionProbe_.minHeapSeen() + F(" stackMin=") + sessionProbe_.stackMinFree());
-    n.add(F("scope=persistent Shannon + PING/PONG + country + Mercury remote-user SUB; SPIRC/metadata/playback next gate"));
+    n.add(F("scope=SPIRC Load -> active Notify transfer ack; metadata/audio acquisition next gate"));
 
     JsonArray a=user.createNestedArray(F("Spotify audio"));
     const auto t=audio_.telemetry();

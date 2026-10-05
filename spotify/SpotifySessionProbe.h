@@ -5,13 +5,14 @@
 #include <freertos/task.h>
 #include <vector>
 
-// dev.2f-r1 persistent AP/Shannon + Mercury session gate.
+// dev.2g-r3 SPIRC transfer-ack diagnostics gate.
 //
-// Qualified dev.2e-r2 handshake/authentication is retained. After APWelcome the
-// socket stays open, Spotify PING packets are acknowledged, country code is
-// captured, and a minimal Mercury SUB is sent for hm://remote/3/user/<user>/.
-// No SPIRC, metadata decode, audio keys, track decode or Spotify PCM playback
-// are introduced in this gate.
+// Qualified dev.2f persistent AP/Shannon + Mercury session behavior is retained.
+// After the remote-user Mercury subscription is acknowledged, this gate sends an
+// independently encoded SPIRC Hello/device-state frame and decodes incoming SPIRC
+// control frames far enough to observe activation/Load/Play/Pause. It deliberately
+// does not fetch metadata, audio keys, CDN data, decode tracks, or feed Spotify
+// audio into the already-qualified PCM backend.
 class SpotifySessionProbe {
 public:
   enum class State : uint8_t {
@@ -28,6 +29,8 @@ public:
     Authenticated,
     MercurySubscribing,
     SessionActive,
+    SpircAdvertising,
+    SpircReady,
     Reconnecting,
     Stopping,
     AuthDeclined,
@@ -37,16 +40,19 @@ public:
   void begin();
   void loop(bool enabled, bool credentialsReady,
             const String& userName, uint8_t authType,
-            const std::vector<uint8_t>& authData, const char* deviceId);
+            const std::vector<uint8_t>& authData, const char* deviceId,
+            const char* deviceName, uint8_t volumePercent);
   bool startNow(const String& userName, uint8_t authType,
-                const std::vector<uint8_t>& authData, const char* deviceId);
+                const std::vector<uint8_t>& authData, const char* deviceId,
+                const char* deviceName, uint8_t volumePercent);
   void requestStop();
   void reset();
 
   bool active() const { return task_ != nullptr; }
   bool authenticated() const {
     return state_ == State::Authenticated || state_ == State::MercurySubscribing ||
-           state_ == State::SessionActive;
+           state_ == State::SessionActive || state_ == State::SpircAdvertising ||
+           state_ == State::SpircReady;
   }
   State state() const { return state_; }
   const char* stateName() const;
@@ -97,6 +103,36 @@ public:
   uint32_t mercuryEvents() const { return mercuryEvents_; }
   uint64_t mercuryLastSequence() const { return mercuryLastSequence_; }
   const char* mercuryLastUri() const { return mercuryLastUri_; }
+  uint32_t spircUriRootEvents() const { return spircUriRootEvents_; }
+  uint32_t spircUriChildEvents() const { return spircUriChildEvents_; }
+  const char* lastReadStage() const { return lastReadStage_; }
+  size_t lastReadDeclaredPayload() const { return lastReadDeclaredPayload_; }
+  uint32_t oversizedPackets() const { return oversizedPackets_; }
+
+  uint32_t spircHelloAttempts() const { return spircHelloAttempts_; }
+  uint32_t spircHelloSent() const { return spircHelloSent_; }
+  uint32_t spircHelloAcks() const { return spircHelloAcks_; }
+  size_t spircHelloBytes() const { return spircHelloBytes_; }
+  uint32_t spircRxFrames() const { return spircRxFrames_; }
+  uint32_t spircRemoteFrames() const { return spircRemoteFrames_; }
+  uint32_t spircSelfEchoes() const { return spircSelfEchoes_; }
+  uint32_t spircNotifyFrames() const { return spircNotifyFrames_; }
+  uint32_t spircLoadFrames() const { return spircLoadFrames_; }
+  uint32_t spircPlayFrames() const { return spircPlayFrames_; }
+  uint32_t spircPauseFrames() const { return spircPauseFrames_; }
+  uint32_t spircLastType() const { return spircLastType_; }
+  bool spircRemoteActive() const { return spircRemoteActive_; }
+  bool spircLocalActive() const { return spircLocalActive_; }
+  uint32_t spircTransferNotifyAttempts() const { return spircTransferNotifyAttempts_; }
+  uint32_t spircTransferNotifySent() const { return spircTransferNotifySent_; }
+  uint32_t spircTransferNotifyAcks() const { return spircTransferNotifyAcks_; }
+  size_t spircTransferNotifyBytes() const { return spircTransferNotifyBytes_; }
+  uint32_t spircLastLoadTrackCount() const { return spircLastLoadTrackCount_; }
+  uint32_t spircLastLoadPositionMs() const { return spircLastLoadPositionMs_; }
+  uint32_t spircLastLoadStatus() const { return spircLastLoadStatus_; }
+  const char* spircLastLoadContext() const { return spircLastLoadContext_; }
+  const char* spircRemoteIdent() const { return spircRemoteIdent_; }
+  const char* spircRemoteName() const { return spircRemoteName_; }
 
   uint32_t reconnectAttempts() const { return reconnectAttempts_; }
   uint32_t reconnectSuccesses() const { return reconnectSuccesses_; }
@@ -116,7 +152,7 @@ private:
   static constexpr uint32_t RECONNECT_DELAY_MS = 2500u;
   static constexpr uint32_t MAX_AUTO_RECONNECTS = 5u;
   static constexpr size_t MAX_AP_PLAIN_PACKET = 16384u;
-  static constexpr size_t MAX_AP_ENCRYPTED_PACKET = 8192u;
+  static constexpr size_t MAX_AP_ENCRYPTED_PACKET = 16384u;
 
   static void taskThunk(void* arg);
   void taskLoop();
@@ -142,6 +178,8 @@ private:
   std::vector<uint8_t> credentialAuthData_;
   uint8_t credentialAuthType_ = 0u;
   char credentialDeviceId_[48] = {0};
+  char credentialDeviceName_[33] = {0};
+  uint16_t credentialVolume16_ = 0u;
 
   uint32_t attempts_ = 0u;
   uint32_t resolveAttempts_ = 0u;
@@ -178,6 +216,7 @@ private:
   uint32_t pingReceived_ = 0u;
   uint32_t pongSent_ = 0u;
   uint32_t serverTimestampSeconds_ = 0u;
+  uint32_t serverTimestampLocalMs_ = 0u;
   char countryCode_[3] = {0};
 
   uint64_t mercurySequence_ = 0u;
@@ -188,6 +227,39 @@ private:
   uint32_t mercuryEvents_ = 0u;
   uint64_t mercuryLastSequence_ = 0u;
   char mercuryLastUri_[128] = {0};
+  uint32_t spircUriRootEvents_ = 0u;
+  uint32_t spircUriChildEvents_ = 0u;
+  char lastReadStage_[16] = "none";
+  size_t lastReadDeclaredPayload_ = 0u;
+  uint32_t oversizedPackets_ = 0u;
+
+  uint32_t spircSequence_ = 0u;
+  uint64_t spircHelloMercurySequence_ = ~static_cast<uint64_t>(0);
+  uint32_t spircHelloAttempts_ = 0u;
+  uint32_t spircHelloSent_ = 0u;
+  uint32_t spircHelloAcks_ = 0u;
+  size_t spircHelloBytes_ = 0u;
+  uint32_t spircRxFrames_ = 0u;
+  uint32_t spircRemoteFrames_ = 0u;
+  uint32_t spircSelfEchoes_ = 0u;
+  uint32_t spircNotifyFrames_ = 0u;
+  uint32_t spircLoadFrames_ = 0u;
+  uint32_t spircPlayFrames_ = 0u;
+  uint32_t spircPauseFrames_ = 0u;
+  uint32_t spircLastType_ = 0u;
+  bool spircRemoteActive_ = false;
+  bool spircLocalActive_ = false;
+  uint64_t spircTransferNotifyMercurySequence_ = ~static_cast<uint64_t>(0);
+  uint32_t spircTransferNotifyAttempts_ = 0u;
+  uint32_t spircTransferNotifySent_ = 0u;
+  uint32_t spircTransferNotifyAcks_ = 0u;
+  size_t spircTransferNotifyBytes_ = 0u;
+  uint32_t spircLastLoadTrackCount_ = 0u;
+  uint32_t spircLastLoadPositionMs_ = 0u;
+  uint32_t spircLastLoadStatus_ = 0u;
+  char spircLastLoadContext_[96] = {0};
+  char spircRemoteIdent_[48] = {0};
+  char spircRemoteName_[33] = {0};
 
   uint32_t reconnectAttempts_ = 0u;
   uint32_t reconnectSuccesses_ = 0u;

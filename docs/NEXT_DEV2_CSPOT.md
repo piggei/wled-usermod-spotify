@@ -30,3 +30,8 @@ track resolution / audio key / CDN
 Spotify volume should map to the already-qualified ES8311 volume path rather
 than introduce an independent software-volume backend unless protocol behavior
 requires otherwise.
+
+## dev.2g update
+
+The next qualified step after dev.2f is now the SPIRC activation gate. dev.2g-r3 now builds on the qualified r2 descendant-URI decoder. It sends a minimal Hello/device-state frame over Mercury, decodes incoming Notify/Load/Play/Pause frames, and acknowledges a remote Load by marking the local SPIRC state active and sending kMessageTypeNotify with the transferred context/position. Track metadata, audio-key/CDN resolution and real
+Spotify media playback remain later gates and must not be folded into dev.2g.

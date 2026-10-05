@@ -11,11 +11,11 @@ pcm_h = (root / "spotify" / "SpotifyPcmTestSource.h").read_text()
 pcm_cpp = (root / "spotify" / "SpotifyPcmTestSource.cpp").read_text()
 
 assert lib["name"] == "wled-usermod-spotify"
-assert lib["version"] == "0.1.0-dev.2f-mercury-session-r1"
+assert lib["version"] == "0.1.0-dev.2g-spirc-activation-r3"
 assert not lib.get("dependencies")
 assert lib["build"]["libArchive"] is False
-assert 'USERMOD_VERSION = "0.1.0-dev.2f-mercury-session"' in header
-assert 'USERMOD_REVISION = "r1"' in header
+assert 'USERMOD_VERSION = "0.1.0-dev.2g-spirc-activation"' in header
+assert 'USERMOD_REVISION = "r3"' in header
 assert "toneTestLoop" not in header
 assert "playTestTone" not in header
 assert "audio_.startTestTone" in header
@@ -86,8 +86,8 @@ shan_cpp = (root / "spotify" / "SpotifyShannon.cpp").read_text()
 assert "SpotifySessionProbe sessionProbe_" in header
 assert 'server.on(F("/spotify-session")' in header
 assert 'action == "probe"' in header and 'action == "stop"' in header and 'action == "reset"' in header
-assert "Spotify persistent Shannon/Mercury gate" in header
-assert "scope=persistent Shannon + PING/PONG + country + Mercury remote-user SUB; SPIRC/metadata/playback next gate" in header
+assert "Spotify SPIRC transfer-ack gate" in header
+assert "scope=SPIRC Load -> active Notify transfer ack; metadata/audio acquisition next gate" in header
 assert "xTaskCreate(taskThunk" in sess_cpp
 assert "xTaskCreatePinnedToCore" not in sess_cpp
 assert "http://apresolve.spotify.com/?type=accesspoint" in sess_cpp
@@ -117,6 +117,10 @@ assert 'resolveWithHttps' not in sess_cpp
 
 assert "MERCURY_SUB_COMMAND = 0xB3u" in sess_cpp
 assert "PONG_COMMAND = 0x49u" in sess_cpp
+assert "SPIRC_HELLO = 0x01u" in sess_cpp
+assert "buildSpircFrame" in sess_cpp and "parseSpircFrame" in sess_cpp
+assert 'String(F("SEND"))' in sess_cpp
+assert "SPIRC hello attempts=" in header and "SPIRC rx=" in header
 assert "persistSkips_" in login_cpp
 print("static checks: PASS")
 

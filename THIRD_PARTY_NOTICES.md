@@ -37,5 +37,5 @@ repository is GPL-3.0-or-later. Do not describe cspot as MIT and do not copy or
 vendor cspot implementation source into this module without first making an
 explicit licensing decision for the combined firmware.
 
-This dev.2f gate therefore contains a small local wire encoder/decoder and an
+This dev.2g gate therefore contains a small local AP/Mercury/SPIRC wire encoder/decoder and an
 independent Shannon primitive rather than importing the cspot runtime.

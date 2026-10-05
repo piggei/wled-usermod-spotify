@@ -26,5 +26,5 @@ Legacy free-form checklists are intentionally not kept in `tools/` so test
 expectations have one authoritative location.
 
 
-### dev.2f-r1
-`test_dev2f_session_contract.py` validates the persistent Shannon keepalive and minimal Mercury envelope/subscription markers. Hardware persistence, PING/PONG, Mercury SUB and reconnect remain explicit manual/JSON gates in `hardware_checks.tsv`.
+### dev.2f-r1 / dev.2g-r1
+`test_dev2f_session_contract.py` retains the persistent Shannon keepalive and Mercury envelope/subscription regression. `test_dev2g_spirc_contract.py` adds the independent SPIRC field-number, Mercury SEND multipart-envelope, Hello and remote-frame-decode contract. Real device activation/Load remains an explicit hardware gate in `hardware_checks.tsv`.

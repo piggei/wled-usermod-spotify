@@ -13,10 +13,10 @@ required = [
 ]
 for marker in required:
     assert marker in s or marker in h, marker
-assert "scope=persistent Shannon + PING/PONG + country + Mercury remote-user SUB" in u
+assert "Mercury SUB attempts=" in u and "keepalive ping=" in u
 assert "NetworkClientSecure" not in s
 assert s.index("if (liveCommand == PING_COMMAND)") < s.index("mercurySubscriptionSequence_ = mercurySequence_++")
-assert "if (subscriptionSent && uri == subscriptionUri)" in s
+assert "subscriptionSent && isSpircSubscriptionUri(uri)" in s
 assert "tcp.setNoDelay" not in s
 assert "while (!stopRequested_ && WiFi.status() != WL_CONNECTED)" in s
 assert 'String(F("hm://remote/user/"))' not in s

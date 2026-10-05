@@ -37,6 +37,12 @@ constexpr uint8_t MERCURY_SEND_COMMAND = 0xB2u;
 constexpr uint8_t MERCURY_SUB_COMMAND = 0xB3u;
 constexpr uint8_t MERCURY_UNSUB_COMMAND = 0xB4u;
 constexpr uint8_t MERCURY_EVENT_COMMAND = 0xB5u;
+constexpr uint32_t SPIRC_HELLO = 0x01u;
+constexpr uint32_t SPIRC_NOTIFY = 0x0Au;
+constexpr uint32_t SPIRC_LOAD = 0x14u;
+constexpr uint32_t SPIRC_PLAY = 0x15u;
+constexpr uint32_t SPIRC_PAUSE = 0x16u;
+constexpr const char* SPIRC_PROTOCOL_VERSION = "2.7.1";
 
 bool sha1Digest(const uint8_t* data, size_t size, uint8_t out[SHA1_BYTES]) {
   if (!out || (!data && size != 0u)) return false;
@@ -393,22 +399,38 @@ bool sendShannonPacket(WiFiClient& client, SpotifyShannon& cipher, uint32_t& non
 
 bool recvShannonPacket(WiFiClient& client, SpotifyShannon& cipher, uint32_t& nonceCounter,
                        size_t maxPayload, uint32_t timeoutMs,
-                       uint8_t& command, std::vector<uint8_t>& payload, bool& macOk) {
+                       uint8_t& command, std::vector<uint8_t>& payload, bool& macOk,
+                       size_t* declaredPayload = nullptr, const char** failStage = nullptr) {
+  if (declaredPayload) *declaredPayload = 0u;
+  if (failStage) *failStage = "none";
   std::vector<uint8_t> header(3u, 0u);
-  if (!readExact(client, header.data(), header.size(), timeoutMs)) return false;
+  if (!readExact(client, header.data(), header.size(), timeoutMs)) {
+    if (failStage) *failStage = "header";
+    return false;
+  }
   cipher.decrypt(header);
   command = header[0];
   const size_t payloadSize = (static_cast<size_t>(header[1]) << 8u) | header[2];
-  if (payloadSize > maxPayload) return false;
+  if (declaredPayload) *declaredPayload = payloadSize;
+  if (payloadSize > maxPayload) {
+    if (failStage) *failStage = "oversize";
+    return false;
+  }
 
   payload.assign(payloadSize, 0u);
   if (payloadSize != 0u) {
-    if (!readExact(client, payload.data(), payload.size(), timeoutMs)) return false;
+    if (!readExact(client, payload.data(), payload.size(), timeoutMs)) {
+      if (failStage) *failStage = "payload";
+      return false;
+    }
     cipher.decrypt(payload);
   }
 
   uint8_t receivedMac[SHANNON_MAC_BYTES];
-  if (!readExact(client, receivedMac, sizeof(receivedMac), timeoutMs)) return false;
+  if (!readExact(client, receivedMac, sizeof(receivedMac), timeoutMs)) {
+    if (failStage) *failStage = "mac-read";
+    return false;
+  }
   std::vector<uint8_t> expectedMac(SHANNON_MAC_BYTES, 0u);
   cipher.finish(expectedMac);
   macOk = memcmp(receivedMac, expectedMac.data(), sizeof(receivedMac)) == 0;
@@ -469,25 +491,251 @@ bool extractProtoString(const uint8_t* data, size_t size, uint32_t wantedField, 
   return false;
 }
 
-std::vector<uint8_t> buildMercuryRequest(uint64_t sequence, const String& method,
-                                         const String& uri) {
+bool extractProtoVarint(const uint8_t* data, size_t size, uint32_t wantedField, uint64_t& out) {
+  size_t offset = 0u;
+  while (offset < size) {
+    uint64_t key = 0u;
+    if (!readVarint(data, size, offset, key)) return false;
+    const uint32_t field = static_cast<uint32_t>(key >> 3u);
+    const uint8_t wire = static_cast<uint8_t>(key & 7u);
+    if (wire == 0u) {
+      uint64_t value = 0u;
+      if (!readVarint(data, size, offset, value)) return false;
+      if (field == wantedField) { out = value; return true; }
+    } else if (wire == 1u) {
+      if (size - offset < 8u) return false;
+      offset += 8u;
+    } else if (wire == 2u) {
+      uint64_t len = 0u;
+      if (!readVarint(data, size, offset, len) || len > size - offset) return false;
+      offset += static_cast<size_t>(len);
+    } else if (wire == 5u) {
+      if (size - offset < 4u) return false;
+      offset += 4u;
+    } else {
+      return false;
+    }
+  }
+  return false;
+}
+
+std::vector<uint8_t> buildSpircCapability(uint32_t type, int64_t intValue,
+                                          const std::vector<String>& stringValues) {
+  std::vector<uint8_t> out;
+  appendVarintField(out, 1u, type);
+  if (intValue >= 0) appendVarintField(out, 2u, static_cast<uint64_t>(intValue));
+  for (const String& value : stringValues) appendStringField(out, 3u, value);
+  return out;
+}
+
+std::vector<uint8_t> buildSpircDeviceState(const char* deviceName, uint16_t volume,
+                                          bool active = false, uint64_t becameActiveAt = 0u) {
+  std::vector<uint8_t> out;
+  appendStringField(out, 1u, String(F("wled-spotify-dev2g")));
+  appendVarintField(out, 10u, active ? 1u : 0u);
+  appendVarintField(out, 11u, 1u); // can_play=true: this gate can accept SPIRC control
+  appendVarintField(out, 12u, volume);
+  appendStringField(out, 13u, String(deviceName && *deviceName ? deviceName : "WLED Matrix"));
+  if (active && becameActiveAt != 0u) appendVarintField(out, 15u, becameActiveAt);
+
+  auto addIntCapability = [&out](uint32_t type, int64_t value) {
+    appendMessageField(out, 17u, buildSpircCapability(type, value, {}));
+  };
+  addIntCapability(2u, 1);   // kCanBePlayer
+  addIntCapability(4u, 4);   // kDeviceType: speaker/computer-compatible value used by cspot
+  addIntCapability(5u, 1);   // kGaiaEqConnectId
+  addIntCapability(6u, 0);   // kSupportsLogout
+  addIntCapability(13u, 1);  // kSupportsPlaylistV2
+  addIntCapability(7u, 1);   // kIsObservable
+  addIntCapability(8u, 64);  // kVolumeSteps
+  appendMessageField(out, 17u, buildSpircCapability(1u, -1, {
+      String(F("album")), String(F("playlist")), String(F("search")),
+      String(F("inbox")), String(F("toplist")), String(F("starred")),
+      String(F("publishedstarred")), String(F("track"))}));
+  appendMessageField(out, 17u, buildSpircCapability(9u, -1, {
+      String(F("audio/track")), String(F("audio/episode")),
+      String(F("audio/episode+track"))}));
+  return out;
+}
+
+std::vector<uint8_t> buildSpircState(uint64_t syncedTimestampMs) {
+  std::vector<uint8_t> out;
+  appendVarintField(out, 4u, 0u);                  // position_ms
+  appendVarintField(out, 5u, 0u);                  // kPlayStatusStop
+  appendVarintField(out, 7u, 0u);                   // position_measured_at for initial stopped state
+  appendVarintField(out, 13u, 0u);                 // shuffle=false
+  appendVarintField(out, 14u, 0u);                 // repeat=false
+  return out;
+}
+
+std::vector<uint8_t> buildSpircFrame(uint32_t type, uint32_t sequence,
+                                     const char* deviceId, const char* deviceName,
+                                     uint16_t volume, uint64_t syncedTimestampMs) {
+  std::vector<uint8_t> out;
+  appendVarintField(out, 1u, 1u);
+  appendStringField(out, 2u, String(deviceId ? deviceId : ""));
+  appendStringField(out, 3u, String(SPIRC_PROTOCOL_VERSION));
+  appendVarintField(out, 4u, sequence);
+  appendVarintField(out, 5u, type);
+  appendMessageField(out, 7u, buildSpircDeviceState(deviceName, volume));
+  appendMessageField(out, 12u, buildSpircState(syncedTimestampMs));
+  appendVarintField(out, 17u, syncedTimestampMs);
+  return out;
+}
+
+struct SpircFrameInfo {
+  uint32_t type = 0u;
+  String ident;
+  String name;
+  bool active = false;
+  bool hasActive = false;
+  uint32_t volume = 0u;
+  bool hasVolume = false;
+  uint32_t position = 0u;
+  bool hasPosition = false;
+  String contextUri;
+  uint32_t positionMs = 0u;
+  bool hasPositionMs = false;
+  uint32_t playStatus = 0u;
+  bool hasPlayStatus = false;
+  uint32_t playingTrackIndex = 0u;
+  bool hasPlayingTrackIndex = false;
+  uint32_t trackCount = 0u;
+};
+
+bool parseSpircFrame(const std::vector<uint8_t>& data, SpircFrameInfo& info) {
+  uint64_t type = 0u;
+  if (!extractProtoVarint(data.data(), data.size(), 5u, type)) return false;
+  info.type = static_cast<uint32_t>(type);
+  extractProtoString(data.data(), data.size(), 2u, info.ident);
+
+  std::vector<uint8_t> deviceState;
+  if (extractLengthDelimited(data.data(), data.size(), 7u, deviceState)) {
+    uint64_t active = 0u;
+    if (extractProtoVarint(deviceState.data(), deviceState.size(), 10u, active)) {
+      info.active = active != 0u;
+      info.hasActive = true;
+    }
+    uint64_t volume = 0u;
+    if (extractProtoVarint(deviceState.data(), deviceState.size(), 12u, volume)) {
+      info.volume = static_cast<uint32_t>(volume);
+      info.hasVolume = true;
+    }
+    extractProtoString(deviceState.data(), deviceState.size(), 13u, info.name);
+  }
+
+  uint64_t position = 0u;
+  if (extractProtoVarint(data.data(), data.size(), 13u, position)) {
+    info.position = static_cast<uint32_t>(position);
+    info.hasPosition = true;
+  }
+
+  std::vector<uint8_t> state;
+  if (extractLengthDelimited(data.data(), data.size(), 12u, state)) {
+    extractProtoString(state.data(), state.size(), 2u, info.contextUri);
+    uint64_t value = 0u;
+    if (extractProtoVarint(state.data(), state.size(), 4u, value)) {
+      info.positionMs = static_cast<uint32_t>(value);
+      info.hasPositionMs = true;
+    }
+    if (extractProtoVarint(state.data(), state.size(), 5u, value)) {
+      info.playStatus = static_cast<uint32_t>(value);
+      info.hasPlayStatus = true;
+    }
+    if (extractProtoVarint(state.data(), state.size(), 26u, value)) {
+      info.playingTrackIndex = static_cast<uint32_t>(value);
+      info.hasPlayingTrackIndex = true;
+    }
+
+    size_t offset = 0u;
+    while (offset < state.size()) {
+      uint64_t key = 0u;
+      if (!readVarint(state.data(), state.size(), offset, key)) break;
+      const uint32_t field = static_cast<uint32_t>(key >> 3u);
+      const uint8_t wire = static_cast<uint8_t>(key & 7u);
+      if (wire == 0u) {
+        uint64_t ignored = 0u;
+        if (!readVarint(state.data(), state.size(), offset, ignored)) break;
+      } else if (wire == 1u) {
+        if (state.size() - offset < 8u) break;
+        offset += 8u;
+      } else if (wire == 2u) {
+        uint64_t len = 0u;
+        if (!readVarint(state.data(), state.size(), offset, len) || len > state.size() - offset) break;
+        if (field == 27u) ++info.trackCount;
+        offset += static_cast<size_t>(len);
+      } else if (wire == 5u) {
+        if (state.size() - offset < 4u) break;
+        offset += 4u;
+      } else {
+        break;
+      }
+    }
+  }
+  return true;
+}
+
+std::vector<uint8_t> buildSpircTransferNotify(uint32_t sequence,
+                                              const char* deviceId,
+                                              const char* deviceName,
+                                              uint16_t volume,
+                                              uint64_t syncedTimestampMs,
+                                              const SpircFrameInfo& remote) {
+  std::vector<uint8_t> state;
+  if (remote.contextUri.length() != 0u) appendStringField(state, 2u, remote.contextUri);
+  const uint32_t position = remote.hasPosition ? remote.position :
+                            (remote.hasPositionMs ? remote.positionMs : 0u);
+  appendVarintField(state, 4u, position);
+  // cspot marks the receiver active and Playing immediately when accepting a Load,
+  // then sends Notify before track acquisition. Mirror that activation contract.
+  appendVarintField(state, 5u, 1u);
+  appendVarintField(state, 7u, syncedTimestampMs);
+  appendVarintField(state, 13u, 0u);
+  appendVarintField(state, 14u, 0u);
+  if (remote.hasPlayingTrackIndex) appendVarintField(state, 26u, remote.playingTrackIndex);
+
+  std::vector<uint8_t> out;
+  appendVarintField(out, 1u, 1u);
+  appendStringField(out, 2u, String(deviceId ? deviceId : ""));
+  appendStringField(out, 3u, String(SPIRC_PROTOCOL_VERSION));
+  appendVarintField(out, 4u, sequence);
+  appendVarintField(out, 5u, SPIRC_NOTIFY);
+  appendMessageField(out, 7u, buildSpircDeviceState(deviceName, volume, true, syncedTimestampMs));
+  appendMessageField(out, 12u, state);
+  appendVarintField(out, 13u, position);
+  appendVarintField(out, 17u, syncedTimestampMs);
+  return out;
+}
+
+std::vector<uint8_t> buildMercuryRequest(
+    uint64_t sequence, const String& method, const String& uri,
+    const std::vector<std::vector<uint8_t>>& payloadParts = {}) {
   std::vector<uint8_t> header;
   appendStringField(header, 1u, uri);
   appendStringField(header, 3u, method);
 
+  size_t reserve = 15u + header.size();
+  for (const auto& part : payloadParts) reserve += 2u + part.size();
   std::vector<uint8_t> out;
-  out.reserve(15u + header.size());
-  appendBe16(out, 8u);                 // sequence byte count
+  out.reserve(reserve);
+  appendBe16(out, 8u);
   appendBe64(out, sequence);
-  out.push_back(0x01u);                // final fragment
-  appendBe16(out, 1u);                 // header is the only part
+  out.push_back(0x01u);
+  appendBe16(out, static_cast<uint16_t>(1u + payloadParts.size()));
   appendBe16(out, static_cast<uint16_t>(header.size()));
   out.insert(out.end(), header.begin(), header.end());
+  for (const auto& part : payloadParts) {
+    if (part.size() > 0xffffu) return {};
+    appendBe16(out, static_cast<uint16_t>(part.size()));
+    out.insert(out.end(), part.begin(), part.end());
+  }
   return out;
 }
 
 bool parseMercuryEnvelope(const std::vector<uint8_t>& data, uint64_t& sequence,
-                          String& uri, String& method) {
+                          String& uri, String& method,
+                          std::vector<std::vector<uint8_t>>& payloadParts) {
+  payloadParts.clear();
   if (data.size() < 7u) return false;
   const size_t sequenceBytes = readBe16At(data, 0u);
   if (sequenceBytes == 0u || sequenceBytes > 8u || data.size() < 2u + sequenceBytes + 5u)
@@ -504,7 +752,16 @@ bool parseMercuryEnvelope(const std::vector<uint8_t>& data, uint64_t& sequence,
   const uint8_t* header = data.data() + offset;
   extractProtoString(header, headerSize, 1u, uri);
   extractProtoString(header, headerSize, 3u, method);
-  return true;
+  offset += headerSize;
+  for (uint16_t part = 1u; part < partCount; ++part) {
+    if (offset + 2u > data.size()) return false;
+    const uint16_t partSize = readBe16At(data, offset);
+    offset += 2u;
+    if (partSize > data.size() - offset) return false;
+    payloadParts.emplace_back(data.begin() + offset, data.begin() + offset + partSize);
+    offset += partSize;
+  }
+  return offset == data.size();
 }
 }
 
@@ -535,6 +792,8 @@ const char* SpotifySessionProbe::stateName() const {
     case State::Authenticated: return "authenticated";
     case State::MercurySubscribing: return "mercury-subscribing";
     case State::SessionActive: return "session-active";
+    case State::SpircAdvertising: return "spirc-advertising";
+    case State::SpircReady: return "spirc-ready";
     case State::Reconnecting: return "reconnecting";
     case State::Stopping: return "stopping";
     case State::AuthDeclined: return "auth-declined";
@@ -577,7 +836,8 @@ void SpotifySessionProbe::updateStackWatermark() {
 
 void SpotifySessionProbe::loop(bool enabled, bool credentialsReady,
                                const String& userName, uint8_t authType,
-                               const std::vector<uint8_t>& authData, const char* deviceId) {
+                               const std::vector<uint8_t>& authData, const char* deviceId,
+                               const char* deviceName, uint8_t volumePercent) {
   if (!enabled) {
     eligibleSinceMs_ = 0u;
     autoAttempted_ = false;
@@ -596,8 +856,9 @@ void SpotifySessionProbe::loop(bool enabled, bool credentialsReady,
     if (!active()) state_ = State::WaitingWifi;
     return;
   }
-  if (active() || autoAttempted_ || state_ == State::SessionActive || state_ == State::MercurySubscribing)
-    return;
+  if (active() || autoAttempted_ || state_ == State::SessionActive ||
+      state_ == State::MercurySubscribing || state_ == State::SpircAdvertising ||
+      state_ == State::SpircReady) return;
 
   const uint32_t now = millis();
   if (eligibleSinceMs_ == 0u) {
@@ -607,12 +868,13 @@ void SpotifySessionProbe::loop(bool enabled, bool credentialsReady,
   }
   if (now - eligibleSinceMs_ >= AUTO_DELAY_MS) {
     autoAttempted_ = true;
-    startNow(userName, authType, authData, deviceId);
+    startNow(userName, authType, authData, deviceId, deviceName, volumePercent);
   }
 }
 
 bool SpotifySessionProbe::startNow(const String& userName, uint8_t authType,
-                                   const std::vector<uint8_t>& authData, const char* deviceId) {
+                                   const std::vector<uint8_t>& authData, const char* deviceId,
+                                   const char* deviceName, uint8_t volumePercent) {
   if (active()) return false;
   if (WiFi.status() != WL_CONNECTED) {
     state_ = State::WaitingWifi;
@@ -629,6 +891,10 @@ bool SpotifySessionProbe::startNow(const String& userName, uint8_t authType,
   credentialAuthType_ = authType;
   credentialAuthData_ = authData;
   strlcpy(credentialDeviceId_, deviceId, sizeof(credentialDeviceId_));
+  strlcpy(credentialDeviceName_, (deviceName && *deviceName) ? deviceName : "WLED Matrix",
+          sizeof(credentialDeviceName_));
+  if (volumePercent > 100u) volumePercent = 100u;
+  credentialVolume16_ = static_cast<uint16_t>((static_cast<uint32_t>(volumePercent) * 65535u + 50u) / 100u);
 
   ++attempts_;
   stopRequested_ = false;
@@ -647,7 +913,12 @@ bool SpotifySessionProbe::startNow(const String& userName, uint8_t authType,
   authResponseBytes_ = 0u;
   authLastCommand_ = 0u;
   lastRxCommand_ = 0u;
+  strlcpy(lastReadStage_, "none", sizeof(lastReadStage_));
+  lastReadDeclaredPayload_ = 0u;
   sessionConnectedMs_ = 0u;
+  spircHelloMercurySequence_ = ~static_cast<uint64_t>(0);
+  spircTransferNotifyMercurySequence_ = ~static_cast<uint64_t>(0);
+  spircHelloBytes_ = 0u;
   lastRxMs_ = 0u;
   heapBefore_ = ESP.getFreeHeap();
   heapAfter_ = heapBefore_;
@@ -712,6 +983,7 @@ void SpotifySessionProbe::reset() {
   pingReceived_ = 0u;
   pongSent_ = 0u;
   serverTimestampSeconds_ = 0u;
+  serverTimestampLocalMs_ = 0u;
   memset(countryCode_, 0, sizeof(countryCode_));
   mercurySequence_ = 0u;
   mercurySubscriptionSequence_ = ~static_cast<uint64_t>(0);
@@ -721,6 +993,38 @@ void SpotifySessionProbe::reset() {
   mercuryEvents_ = 0u;
   mercuryLastSequence_ = 0u;
   memset(mercuryLastUri_, 0, sizeof(mercuryLastUri_));
+  spircUriRootEvents_ = 0u;
+  spircUriChildEvents_ = 0u;
+  strlcpy(lastReadStage_, "none", sizeof(lastReadStage_));
+  lastReadDeclaredPayload_ = 0u;
+  oversizedPackets_ = 0u;
+  spircSequence_ = 0u;
+  spircHelloMercurySequence_ = ~static_cast<uint64_t>(0);
+  spircHelloAttempts_ = 0u;
+  spircHelloSent_ = 0u;
+  spircHelloAcks_ = 0u;
+  spircHelloBytes_ = 0u;
+  spircRxFrames_ = 0u;
+  spircRemoteFrames_ = 0u;
+  spircSelfEchoes_ = 0u;
+  spircNotifyFrames_ = 0u;
+  spircLoadFrames_ = 0u;
+  spircPlayFrames_ = 0u;
+  spircPauseFrames_ = 0u;
+  spircLastType_ = 0u;
+  spircRemoteActive_ = false;
+  spircLocalActive_ = false;
+  spircTransferNotifyMercurySequence_ = ~static_cast<uint64_t>(0);
+  spircTransferNotifyAttempts_ = 0u;
+  spircTransferNotifySent_ = 0u;
+  spircTransferNotifyAcks_ = 0u;
+  spircTransferNotifyBytes_ = 0u;
+  spircLastLoadTrackCount_ = 0u;
+  spircLastLoadPositionMs_ = 0u;
+  spircLastLoadStatus_ = 0u;
+  memset(spircLastLoadContext_, 0, sizeof(spircLastLoadContext_));
+  memset(spircRemoteIdent_, 0, sizeof(spircRemoteIdent_));
+  memset(spircRemoteName_, 0, sizeof(spircRemoteName_));
   reconnectAttempts_ = 0u;
   reconnectSuccesses_ = 0u;
   lastDurationMs_ = 0u;
@@ -811,6 +1115,8 @@ void SpotifySessionProbe::finishTask(uint32_t startedMs) {
   credentialUser_ = String();
   credentialAuthType_ = 0u;
   memset(credentialDeviceId_, 0, sizeof(credentialDeviceId_));
+  memset(credentialDeviceName_, 0, sizeof(credentialDeviceName_));
+  credentialVolume16_ = 0u;
   taskStartedMs_ = 0u;
   task_ = nullptr;
 }
@@ -965,16 +1271,77 @@ bool SpotifySessionProbe::runOneSession(bool reconnecting) {
   if (reconnecting) ++reconnectSuccesses_;
   state_ = State::Authenticated;
   setError("none");
+  spircLocalActive_ = false;
+  spircTransferNotifyMercurySequence_ = ~static_cast<uint64_t>(0);
   sessionConnectedMs_ = millis();
   lastRxMs_ = sessionConnectedMs_;
   updateStackWatermark();
 
-  // Minimal Mercury gate. Current embedded cspot interoperability references use
-  // hm://remote/3/user/<user>/.  We wait for Spotify's first authenticated PING
-  // before sending SUB, mirroring the observed AP startup ordering: APWelcome,
-  // PING/PONG time sync, then Mercury subscription.
+  // Current embedded cspot interoperability references use
+  // hm://remote/3/user/<user>/. Spotify may deliver subscribed SPIRC events on
+  // descendant URIs such as hm://remote/3/user/<user>/<connection-id>; treat the
+  // subscribed root and all of its descendants as the same SPIRC stream.
   const String subscriptionUri = String(F("hm://remote/3/user/")) + credentialUser_ + F("/");
+  auto isSpircSubscriptionUri = [&subscriptionUri](const String& uri) -> bool {
+    return uri == subscriptionUri || uri.startsWith(subscriptionUri);
+  };
   bool subscriptionSent = false;
+  bool subscriptionReadyThisSession = false;
+  bool spircHelloSentThisSession = false;
+
+  auto syncedTimestampMs = [this]() -> uint64_t {
+    if (serverTimestampSeconds_ == 0u) return static_cast<uint64_t>(millis());
+    const uint32_t elapsed = serverTimestampLocalMs_ == 0u ? 0u : millis() - serverTimestampLocalMs_;
+    return static_cast<uint64_t>(serverTimestampSeconds_) * 1000ULL + elapsed;
+  };
+
+  auto sendSpircHello = [&]() -> bool {
+    if (spircHelloSentThisSession) return true;
+    state_ = State::SpircAdvertising;
+    ++spircHelloAttempts_;
+    const std::vector<uint8_t> frame = buildSpircFrame(
+        SPIRC_HELLO, spircSequence_++, credentialDeviceId_, credentialDeviceName_,
+        credentialVolume16_, syncedTimestampMs());
+    spircHelloBytes_ = frame.size();
+    spircHelloMercurySequence_ = mercurySequence_++;
+    const std::vector<uint8_t> request = buildMercuryRequest(
+        spircHelloMercurySequence_, String(F("SEND")), subscriptionUri, {frame});
+    if (request.empty() ||
+        !sendShannonPacket(tcp, sendCipher, sendNonce, MERCURY_SEND_COMMAND, request, IO_TIMEOUT_MS)) {
+      setError("SPIRC Hello Mercury SEND failed");
+      return false;
+    }
+    spircHelloSentThisSession = true;
+    ++spircHelloSent_;
+    ++txPackets_;
+    return true;
+  };
+
+  auto sendSpircTransferNotify = [&](const SpircFrameInfo& remote) -> bool {
+    ++spircTransferNotifyAttempts_;
+    const std::vector<uint8_t> frame = buildSpircTransferNotify(
+        spircSequence_++, credentialDeviceId_, credentialDeviceName_,
+        credentialVolume16_, syncedTimestampMs(), remote);
+    spircTransferNotifyBytes_ = frame.size();
+    spircTransferNotifyMercurySequence_ = mercurySequence_++;
+    const std::vector<uint8_t> request = buildMercuryRequest(
+        spircTransferNotifyMercurySequence_, String(F("SEND")), subscriptionUri, {frame});
+    if (request.empty() ||
+        !sendShannonPacket(tcp, sendCipher, sendNonce, MERCURY_SEND_COMMAND, request, IO_TIMEOUT_MS)) {
+      setError("SPIRC Load Notify Mercury SEND failed");
+      return false;
+    }
+    ++spircTransferNotifySent_;
+    ++txPackets_;
+    spircLocalActive_ = true;
+    spircLastLoadTrackCount_ = remote.trackCount;
+    spircLastLoadPositionMs_ = remote.hasPosition ? remote.position :
+                               (remote.hasPositionMs ? remote.positionMs : 0u);
+    spircLastLoadStatus_ = remote.hasPlayStatus ? remote.playStatus : 0u;
+    strlcpy(spircLastLoadContext_, remote.contextUri.c_str(), sizeof(spircLastLoadContext_));
+    state_ = State::SpircReady;
+    return true;
+  };
 
   while (!stopRequested_) {
     if (WiFi.status() != WL_CONNECTED) {
@@ -996,10 +1363,18 @@ bool SpotifySessionProbe::runOneSession(bool reconnecting) {
     std::vector<uint8_t> payload;
     bool liveMacOk = false;
     uint8_t liveCommand = 0u;
+    size_t declaredPayload = 0u;
+    const char* readFailStage = "none";
     if (!recvShannonPacket(tcp, recvCipher, recvNonce, MAX_AP_ENCRYPTED_PACKET,
-                           IO_TIMEOUT_MS, liveCommand, payload, liveMacOk)) {
+                           IO_TIMEOUT_MS, liveCommand, payload, liveMacOk,
+                           &declaredPayload, &readFailStage)) {
+      lastReadDeclaredPayload_ = declaredPayload;
+      strlcpy(lastReadStage_, readFailStage ? readFailStage : "unknown", sizeof(lastReadStage_));
+      if (readFailStage && strcmp(readFailStage, "oversize") == 0) ++oversizedPackets_;
       tcp.stop(); state_ = State::Failed; setError("Spotify session packet read failed"); return false;
     }
+    lastReadDeclaredPayload_ = declaredPayload;
+    strlcpy(lastReadStage_, "none", sizeof(lastReadStage_));
     ++rxPackets_;
     lastRxCommand_ = liveCommand;
     lastRxMs_ = millis();
@@ -1015,6 +1390,7 @@ bool SpotifySessionProbe::runOneSession(bool reconnecting) {
                                   (static_cast<uint32_t>(payload[1]) << 16u) |
                                   (static_cast<uint32_t>(payload[2]) << 8u) |
                                   static_cast<uint32_t>(payload[3]);
+        serverTimestampLocalMs_ = millis();
       }
       if (!sendShannonPacket(tcp, sendCipher, sendNonce, PONG_COMMAND, payload, IO_TIMEOUT_MS)) {
         tcp.stop(); state_ = State::Failed; setError("Spotify PONG write failed"); return false;
@@ -1036,7 +1412,10 @@ bool SpotifySessionProbe::runOneSession(bool reconnecting) {
         ++txPackets_;
       }
 
-      if (mercurySubResponses_ > 0u) state_ = State::SessionActive;
+      if (subscriptionReadyThisSession) {
+        state_ = State::SessionActive;
+        if (!sendSpircHello()) { tcp.stop(); state_ = State::Failed; return false; }
+      }
       continue;
     }
 
@@ -1051,24 +1430,77 @@ bool SpotifySessionProbe::runOneSession(bool reconnecting) {
         liveCommand == MERCURY_UNSUB_COMMAND || liveCommand == MERCURY_EVENT_COMMAND) {
       uint64_t sequence = 0u;
       String uri, method;
-      if (parseMercuryEnvelope(payload, sequence, uri, method)) {
+      std::vector<std::vector<uint8_t>> parts;
+      if (parseMercuryEnvelope(payload, sequence, uri, method, parts)) {
         mercuryLastSequence_ = sequence;
         if (uri.length() != 0u) strlcpy(mercuryLastUri_, uri.c_str(), sizeof(mercuryLastUri_));
+
+        bool subscriptionBecameReady = false;
         if (liveCommand == MERCURY_EVENT_COMMAND) {
           ++mercuryEvents_;
-          // Spotify delivers subscription traffic on 0xB5. Treat the first
-          // event for our remote-user URI as proof that the SUB is active.
-          if (subscriptionSent && uri == subscriptionUri) {
+          if (subscriptionSent && isSpircSubscriptionUri(uri)) {
+            if (uri == subscriptionUri) ++spircUriRootEvents_;
+            else ++spircUriChildEvents_;
             ++mercurySubResponses_;
+            subscriptionReadyThisSession = true;
             state_ = State::SessionActive;
+            subscriptionBecameReady = true;
+
+            for (const auto& part : parts) {
+              SpircFrameInfo info;
+              if (!parseSpircFrame(part, info)) continue;
+              ++spircRxFrames_;
+              spircLastType_ = info.type;
+              const bool self = info.ident.length() != 0u && info.ident == String(credentialDeviceId_);
+              if (self) {
+                ++spircSelfEchoes_;
+              } else {
+                ++spircRemoteFrames_;
+                if (info.ident.length() != 0u) strlcpy(spircRemoteIdent_, info.ident.c_str(), sizeof(spircRemoteIdent_));
+                if (info.name.length() != 0u) strlcpy(spircRemoteName_, info.name.c_str(), sizeof(spircRemoteName_));
+                if (info.hasActive) spircRemoteActive_ = info.active;
+              }
+              if (info.type == SPIRC_NOTIFY) {
+                ++spircNotifyFrames_;
+              } else if (info.type == SPIRC_LOAD) {
+                ++spircLoadFrames_;
+                // A remote Load is the Connect transfer request. cspot accepts it by
+                // becoming active and immediately sending a Notify containing the
+                // transferred context/position. Playback acquisition remains outside
+                // this diagnostic gate, but the control-plane acknowledgement is real.
+                if (!self && !sendSpircTransferNotify(info)) {
+                  tcp.stop(); state_ = State::Failed; return false;
+                }
+              } else if (info.type == SPIRC_PLAY) {
+                ++spircPlayFrames_;
+              } else if (info.type == SPIRC_PAUSE) {
+                ++spircPauseFrames_;
+              }
+              state_ = State::SpircReady;
+            }
           }
         } else {
           ++mercuryResponses_;
-          // Some AP implementations can acknowledge the SUB directly on 0xB3.
           if (liveCommand == MERCURY_SUB_COMMAND && sequence == mercurySubscriptionSequence_) {
             ++mercurySubResponses_;
+            subscriptionReadyThisSession = true;
             state_ = State::SessionActive;
+            subscriptionBecameReady = true;
           }
+          if (liveCommand == MERCURY_SEND_COMMAND &&
+              sequence == spircHelloMercurySequence_) {
+            ++spircHelloAcks_;
+            state_ = State::SpircReady;
+          }
+          if (liveCommand == MERCURY_SEND_COMMAND &&
+              sequence == spircTransferNotifyMercurySequence_) {
+            ++spircTransferNotifyAcks_;
+            state_ = State::SpircReady;
+          }
+        }
+
+        if (subscriptionBecameReady && !spircHelloSentThisSession) {
+          if (!sendSpircHello()) { tcp.stop(); state_ = State::Failed; return false; }
         }
       }
       continue;
