@@ -11,10 +11,11 @@ pcm_h = (root / "spotify" / "SpotifyPcmTestSource.h").read_text()
 pcm_cpp = (root / "spotify" / "SpotifyPcmTestSource.cpp").read_text()
 
 assert lib["name"] == "wled-usermod-spotify"
-assert lib["version"] == "0.1.0-dev.2d-loginblob-r4"
+assert lib["version"] == "0.1.0-dev.2e-ap-auth-r2"
+assert not lib.get("dependencies")
 assert lib["build"]["libArchive"] is False
-assert 'USERMOD_VERSION = "0.1.0-dev.2d-loginblob"' in header
-assert 'USERMOD_REVISION = "r4"' in header
+assert 'USERMOD_VERSION = "0.1.0-dev.2e-ap-auth"' in header
+assert 'USERMOD_REVISION = "r2"' in header
 assert "toneTestLoop" not in header
 assert "playTestTone" not in header
 assert "audio_.startTestTone" in header
@@ -76,4 +77,49 @@ assert "mbedtls_sha1_ret" not in login_cpp
 assert "mbedtls_sha1(data" not in login_cpp
 assert login_cpp.count("++persistSuccesses_;") == 1
 
+
+# dev.2e-r2 AP handshake + Shannon stored-credential authentication gate
+sess_h = (root / "spotify" / "SpotifySessionProbe.h").read_text()
+sess_cpp = (root / "spotify" / "SpotifySessionProbe.cpp").read_text()
+shan_h = (root / "spotify" / "SpotifyShannon.h").read_text()
+shan_cpp = (root / "spotify" / "SpotifyShannon.cpp").read_text()
+assert "SpotifySessionProbe sessionProbe_" in header
+assert 'server.on(F("/spotify-session")' in header
+assert 'action == "probe"' in header and 'action == "reset"' in header
+assert "Spotify AP authentication gate" in header
+assert "scope=ClientHello + DH + Shannon + stored-credential AP auth only; Mercury/playback next gate" in header
+assert "xTaskCreate(taskThunk" in sess_cpp
+assert "xTaskCreatePinnedToCore" not in sess_cpp
+assert "http://apresolve.spotify.com/?type=accesspoint" in sess_cpp
+assert 'KEY_CURRENT = "accesspoint"' in sess_cpp
+assert 'KEY_LEGACY = "ap_list"' in sess_cpp
+assert 'AP_FALLBACK = "ap.spotify.com:443"' in sess_cpp
+assert "tcp.connect(host.c_str(), port, CONNECT_TIMEOUT_MS)" in sess_cpp
+assert "buildClientHello" in sess_cpp and "parseApDhPublicKey" in sess_cpp
+assert "LOGIN_REQUEST_COMMAND = 0xABu" in sess_cpp
+assert "AUTH_SUCCESSFUL_COMMAND = 0xACu" in sess_cpp
+assert "AUTH_DECLINED_COMMAND = 0xADu" in sess_cpp
+assert "resultData.begin() + 20" in sess_cpp
+assert "resultData.begin() + 52" in sess_cpp
+assert "resultData.begin() + 84" in sess_cpp
+assert "sendShannonPacket" in sess_cpp and "recvShannonPacket" in sess_cpp
+assert "state_ = State::Authenticated" in sess_cpp
+assert "zeroConf_.userName()" in header and "zeroConf_.authData()" in header
+assert "const String& userName() const" in zc_h
+assert "const std::vector<uint8_t>& authData() const" in zc_h
+assert "INITIAL_CONSTANT = 0x6996c53a" in shan_h
+assert "void SpotifyShannon::encrypt" in shan_cpp
+assert "void SpotifyShannon::decrypt" in shan_cpp
+assert "void SpotifyShannon::finish" in shan_cpp
+assert 'NetworkClientSecure' not in sess_cpp
+assert 'WiFiClientSecure' not in sess_cpp
+assert 'resolveWithHttps' not in sess_cpp
+
 print("static checks: PASS")
+
+# Third-party/provenance guard: do not regress to the earlier incorrect cspot-MIT assumption.
+notices = (root / "THIRD_PARTY_NOTICES.md").read_text()
+assert "GPL-3.0-or-later" in notices
+assert "independent C++ implementation" in notices
+assert "cspot" in notices
+assert "cspot/bell" not in notices or "MIT" not in notices.split("cspot/bell", 1)[-1][:120]

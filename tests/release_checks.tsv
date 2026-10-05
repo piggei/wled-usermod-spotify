@@ -8,8 +8,8 @@ LIB_ARCHIVE	prebuild	required	file_contains	library.json	"libArchive": false	Pla
 LIB_SRCDIR	prebuild	required	file_contains	library.json	"srcDir": "."	library source root is repository root
 LIB_AUDIO	prebuild	required	file_contains	library.json	+<audio/*.cpp>	audio translation units are included
 LIB_SPOTIFY	prebuild	required	file_contains	library.json	+<spotify/*.cpp>	Spotify translation units are included
-BUILD_LINE	prebuild	required	file_contains	usermod_spotify_connect.h	USERMOD_VERSION = "0.1.0-dev.2d-loginblob"	functional development line is correct
-BUILD_REV	prebuild	required	file_contains	usermod_spotify_connect.h	USERMOD_REVISION = "r4"	revision marker is r4
+BUILD_LINE	prebuild	required	file_contains	usermod_spotify_connect.h	USERMOD_VERSION = "0.1.0-dev.2e-ap-auth"	AP authentication development line is correct
+BUILD_REV	prebuild	required	file_contains	usermod_spotify_connect.h	USERMOD_REVISION = "r2"	revision marker is r2
 ZEROCONF_GATE	prebuild	required	tree_contains	.	spotify-connect	Spotify mDNS discovery service is retained
 AUDIO_POLICY	prebuild	required	tree_contains	.	policy=shared 32-bit slave when owned+clocked	qualified 32-bit shared-I2S policy is retained
 PCM_INGRESS	prebuild	required	tree_contains	.	enqueuePcm44100	cspot-facing 44.1 kHz PCM ingress is present
@@ -37,12 +37,41 @@ NO_SHA1_MD	prebuild	required	file_not_contains	spotify/SpotifyLoginBlob.cpp	mbed
 NO_SHA1_RET	prebuild	required	file_not_contains	spotify/SpotifyLoginBlob.cpp	mbedtls_sha1_ret	removed SHA1 API is absent
 NO_SHA1_LEGACY	prebuild	required	file_not_contains	spotify/SpotifyLoginBlob.cpp	mbedtls_sha1(data	legacy direct SHA1 API is absent
 RUNNER_FW_SEARCH	prebuild	required	python_script	tests/test_runner_firmware_search.py	exit=0	postbuild raw firmware search regression passes under pipefail
-STATIC_PY	prebuild	required	python_script	tests/test_static.py	exit=0	static source regression suite passes
-FW_VERSION	postbuild	required	firmware_contains	firmware	0.1.0-dev.2d-loginblob	firmware contains development-line marker
-FW_REVISION	postbuild	required	firmware_contains	firmware	r4	firmware contains revision marker
-FW_ZEROCONF	postbuild	required	firmware_contains	firmware	Spotify LoginBlob diagnostic gate	firmware contains LoginBlob auth gate marker
+SESSION_HEADER	prebuild	required	file_exists	spotify/SpotifySessionProbe.h	present	AP authentication interface is present
+SESSION_CPP	prebuild	required	file_exists	spotify/SpotifySessionProbe.cpp	present	AP authentication implementation is present
+SESSION_ENDPOINT	prebuild	required	file_contains	usermod_spotify_connect.h	/spotify-session	manual AP authentication probe endpoint is present
+SESSION_APRESOLVE	prebuild	required	tree_contains	.	http://apresolve.spotify.com/?type=accesspoint	Spotify plain-HTTP AP resolver gate is present
+SESSION_AP_FALLBACK	prebuild	required	tree_contains	.	ap.spotify.com:443	known AP fallback is retained
+SESSION_TCP	prebuild	required	tree_contains	.	tcp.connect(host.c_str(), port, CONNECT_TIMEOUT_MS)	qualified bare AP TCP transport is retained
+SESSION_TASK_UNPINNED	prebuild	required	file_not_contains	spotify/SpotifySessionProbe.cpp	xTaskCreatePinnedToCore	AP authentication network task is not pinned
+SESSION_NO_SECURE_HEADER	prebuild	required	file_not_contains	spotify/SpotifySessionProbe.cpp	NetworkClientSecure.h	AP transport source has no unavailable secure-client header dependency
+SESSION_NO_SECURE_DEP	prebuild	required	file_not_contains	library.json	NetworkClientSecure	AP transport gate has no unavailable secure-client library dependency
+NO_LEGACY_WIFI_SECURE	prebuild	required	file_not_contains	spotify/SpotifySessionProbe.cpp	WiFiClientSecure.h	legacy secure-client header is absent
+SESSION_CONTRACT	prebuild	required	python_script	tests/test_apresolve_contract.py	exit=0	AP resolve/TCP transport regression passes
+SHANNON_HEADER	prebuild	required	file_exists	spotify/SpotifyShannon.h	present	Shannon cipher interface is present
+SHANNON_CPP	prebuild	required	file_exists	spotify/SpotifyShannon.cpp	present	Shannon cipher implementation is present
+SHANNON_VECTOR	prebuild	required	python_script	tests/test_shannon_vector.py	exit=0	Shannon known-answer encryption/MAC vector passes
+SESSION_AUTH_CONTRACT	prebuild	required	python_script	tests/test_ap_auth_contract.py	exit=0	ClientHello/DH/Shannon/stored-credential auth contract passes
+SESSION_CLIENT_HELLO	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp	SPOTIFY_VERSION = 0x10800000000ULL	Spotify ClientHello protocol version marker is present
+SESSION_DH	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp	calculateDhShared	AP Diffie-Hellman key derivation is present
+SESSION_CHALLENGE	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp	challengeData.insert	AP challenge transcript derivation is present
+SESSION_SHANNON	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp	sendShannonPacket	Shannon encrypted packet transport is present
+SESSION_LOGIN_CMD	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp	LOGIN_REQUEST_COMMAND = 0xABu	Spotify login command 0xAB is present
+SESSION_WELCOME_CMD	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp	AUTH_SUCCESSFUL_COMMAND = 0xACu	Spotify APWelcome command 0xAC is present
+SESSION_DECLINE_CMD	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp	AUTH_DECLINED_COMMAND = 0xADu	Spotify APLoginFailed command 0xAD is present
+SESSION_CREDENTIAL_GETTERS	prebuild	required	file_contains	spotify/SpotifyZeroConfProbe.h	const std::vector<uint8_t>& authData() const	qualified cached credential is exposed only to the AP session gate
+SESSION_SCOPE	prebuild	required	file_contains	usermod_spotify_connect.h	scope=ClientHello + DH + Shannon + stored-credential AP auth only; Mercury/playback next gate	scope remains limited to AP authentication
+THIRD_PARTY_CSPOT	prebuild	required	file_contains	THIRD_PARTY_NOTICES.md	GPL-3.0-or-later	cspot licensing note is accurate and does not repeat the earlier MIT assumption
+THIRD_PARTY_SHANNON	prebuild	required	file_contains	THIRD_PARTY_NOTICES.md	independent C++ implementation	Shannon implementation provenance is documented
+STATIC_PY	prebuild	required	python_script	tests/test_static.py	exit=0	static source regression suite passes including AP auth integration
+FW_SHANNON	postbuild	required	firmware_contains	firmware	Shannon keys tx=	firmware contains Shannon session diagnostics
+FW_AP_AUTH	postbuild	required	firmware_contains	firmware	AP auth attempts=	firmware contains AP authentication diagnostics
+FW_VERSION	postbuild	required	firmware_contains	firmware	0.1.0-dev.2e-ap-auth	firmware contains AP authentication development-line marker
+FW_REVISION	postbuild	required	firmware_contains	firmware	r2	firmware contains revision marker
+FW_ZEROCONF	postbuild	required	firmware_contains	firmware	Spotify AP authentication gate	firmware contains AP authentication gate marker
 FW_AUDIO_POLICY	postbuild	required	firmware_contains	firmware	policy=shared 32-bit slave when owned+clocked	firmware contains qualified shared-I2S policy
 FW_PCM_INGRESS	postbuild	required	firmware_contains	firmware	PCM ingress 44100->	firmware contains PCM ingress diagnostics
 FW_LOGINBLOB	postbuild	required	firmware_contains	firmware	LoginBlob attempts=	firmware contains LoginBlob diagnostics
+FW_SESSION	postbuild	required	firmware_contains	firmware	scope=ClientHello + DH + Shannon + stored-credential AP auth only	firmware contains AP authentication scope marker
 FW_NO_OLD_AR_BLOCK	postbuild	required	firmware_not_contains	firmware	blocked: AudioReactive owns shared I2S clocks	firmware does not contain obsolete AudioReactive blocker
 FW_NO_OLD_LRCK_BLOCK	postbuild	required	firmware_not_contains	firmware	blocked: shared LRCK active (AudioReactive/I2S0)	firmware does not contain obsolete LRCK blocker

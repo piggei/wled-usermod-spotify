@@ -31,6 +31,8 @@ public:
   const char* stateName() const;
 
   bool credentialsReady() const { return loginBlob_.credentialsReady(); }
+  const String& userName() const { return loginBlob_.userName(); }
+  const std::vector<uint8_t>& authData() const { return loginBlob_.authData(); }
   uint8_t authType() const { return loginBlob_.authType(); }
   size_t authDataBytes() const { return loginBlob_.authDataBytes(); }
   size_t userNameBytes() const { return loginBlob_.userNameBytes(); }

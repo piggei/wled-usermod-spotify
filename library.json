@@ -1,7 +1,7 @@
 {
   "name": "wled-usermod-spotify",
-  "version": "0.1.0-dev.2d-loginblob-r4",
-  "description": "Spotify Connect LoginBlob/audio usermod for WLED on Waveshare ESP32-S3 RGB Matrix",
+  "version": "0.1.0-dev.2e-ap-auth-r2",
+  "description": "Spotify Connect AP authentication/audio usermod for WLED on Waveshare ESP32-S3 RGB Matrix",
   "keywords": [
     "wled",
     "spotify",
