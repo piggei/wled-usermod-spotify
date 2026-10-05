@@ -1,0 +1,11 @@
+ID	TYPE	PROCEDURE	EXPECTED	RESULT	NOTES
+AUDIO_COLD_BOOT	manual	Cold boot, do not open Usermod settings, then start /spotify-test?action=start&tone=1000	Tone starts immediately using saved volume	PASS	Qualified on dev.2b-audio-refactor-r2
+AUDIO_QUALITY	manual	Listen to continuous direct 1000 Hz test tone	Tone is clean and stable with no noise modulation	PASS	Qualified on dev.2b-audio-refactor-r2
+AUDIO_CONTINUOUS	manual	Leave direct test tone running until explicitly stopped	Tone continues indefinitely and stops only on action=stop	PASS	Qualified on dev.2b-audio-refactor-r2
+VOLUME_UI	manual	Open Settings -> Usermods -> Spotify Connect	Exactly one 0-100 Volume slider is visible; no duplicate numeric field	PASS	Qualified on dev.2b-audio-refactor-r2
+VOLUME_RUNTIME	manual	Move Volume slider while tone is active	Audible level changes and saved value is used after reboot	PASS	Qualified on dev.2b-audio-refactor-r2
+I2S_TELEMETRY	json	Read /json/info while direct tone is active	shared 22050 Hz, output 32-bit, DMA 8x256, err=0, short=0, late=0, ringUnderrun=0	PASS	Qualified on dev.2b-audio-refactor-r2
+PCM44_PITCH	manual	Start /spotify-test?action=start-pcm&tone=1000	Tone is clean, continuous and has the same 1 kHz pitch as the direct test	PENDING	dev.2c-r1 gate
+PCM44_RATIO	json	Read /json/info after start-pcm has run for at least 30 seconds	PCM ingress 44100->22050; inFrames is approximately 2x outFrames; failures=0 and feedFail=0	PENDING	dev.2c-r1 gate
+PCM44_RING	json	Read /json/info while start-pcm is active	ringUnderrun=0 and I2S err=0 short=0 late=0	PENDING	dev.2c-r1 gate
+PCM44_STOP	manual	Call /spotify-test?action=stop while start-pcm is active	Playback stops promptly and buffered PCM is flushed	PENDING	dev.2c-r1 gate

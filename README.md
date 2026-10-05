@@ -1,4 +1,33 @@
-# WLED Spotify Connect — v0.1.0-dev.1 hardware gate
+# WLED Spotify Connect Usermod
+
+## Current development build: v0.1.0-dev.2c-pcm-ingress-r1
+
+This build preserves the hardware-qualified dev.2b-r2 shared-I2S/ES8311
+runtime and adds the exact **44.1 kHz / signed 16-bit stereo PCM ingress** that
+cspot will use. In shared AudioReactive mode it performs 2:1 conversion to the
+qualified 22.05 kHz stream before the PSRAM ring; standalone mode remains
+44.1 kHz passthrough. See `docs/DEV2C_PCM_INGRESS.md`.
+
+Direct hardware-path regression test:
+
+```text
+/spotify-test?action=start&tone=1000
+/spotify-test?action=stop
+```
+
+cspot-like 44.1-kHz PCM ingress test:
+
+```text
+/spotify-test?action=start-pcm&tone=1000
+/spotify-test?action=stop
+```
+
+---
+
+## v0.1.0-dev.2a-r1 — Spotify Connect discovery gate
+
+This build retains the qualified dev.1-r9 audio backend and adds the first Spotify Connect network gate: `_spotify-connect._tcp` mDNS advertisement plus `GET /spotify_info`. It is intentionally **discovery-only**: `POST /spotify_info` / `addUser` is rejected without storing or logging Spotify credentials. See `docs/DEV2A_ZEROCONF_GATE.md`.
+
 
 Target: **WLED 17.0.0-devV5, vid 2607201, ESP32-S3_Waveshare_HUB75** on Waveshare ESP32-S3 RGB Matrix.
 

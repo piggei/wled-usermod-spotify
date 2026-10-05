@@ -1,17 +1,15 @@
 #pragma once
 #include "wled.h"
 #include "audio/WavesharePcmOutput.h"
-#include <math.h>
+#include "spotify/SpotifyZeroConfProbe.h"
+#include "spotify/SpotifyPcmTestSource.h"
 #include <driver/gpio.h>
 #include <esp_timer.h>
 
-// v0.1.0-dev.1: WLED17/Waveshare 44.1-kHz hardware gate.
-// Intentionally does not yet embed cspot. It validates the exact audio path that
-// cspot will feed in dev.2, without mixing network/protocol failures into bring-up.
 class UsermodSpotifyConnect : public Usermod {
 private:
-  static constexpr const char* USERMOD_VERSION = "0.1.0-dev.1";
-  static constexpr const char* USERMOD_REVISION = "r9";
+  static constexpr const char* USERMOD_VERSION = "0.1.0-dev.2c-pcm-ingress";
+  static constexpr const char* USERMOD_REVISION = "r1";
   bool enabled_ = false;
   bool ready_ = false;
   bool initPending_ = false;
@@ -19,6 +17,8 @@ private:
   uint8_t volume_ = 70;
   char deviceName_[33] = "WLED Matrix";
   WavesharePcmOutput audio_;
+  SpotifyZeroConfProbe zeroConf_;
+  SpotifyPcmTestSource pcmTest_;
 
   bool arOwnsPin(int pin) const {
     return PinManager::getPinOwner(pin) == PinOwner::UM_Audioreactive;
@@ -44,9 +44,6 @@ private:
   enum class ClockMode : uint8_t { StandaloneMaster, SharedSlave, WaitingSharedClock };
 
   ClockMode selectClockMode() const {
-    // Match the hardware-qualified Buzzer strategy. If AudioReactive still owns
-    // the shared clock pins and LRCK is physically present, follow those clocks
-    // as I2S1 TX slave instead of creating a competing clock master.
     if (!audioReactiveOwnsAnyClock()) return ClockMode::StandaloneMaster;
     if (sharedLrckActive()) return ClockMode::SharedSlave;
     return ClockMode::WaitingSharedClock;
@@ -56,51 +53,62 @@ private:
     if (!enabled_ || ready_) return;
     const ClockMode mode = selectClockMode();
     if (mode == ClockMode::WaitingSharedClock) return;
-    // Board I2C is normally already active under WLED17; avoid resetting a live
-    // sensor/microphone bus. In shared mode I2S0 remains the physical clock owner.
     ready_ = audio_.begin(volume_, mode == ClockMode::SharedSlave, false);
-  }
-
-  void playTestTone(uint16_t hz=1000, uint16_t ms=1500) {
-    if (!ready_ || hz < 20 || hz > 10000 || ms == 0) return;
-    constexpr size_t FRAMES = 256;
-    int16_t pcm[FRAMES*2];
-    const uint32_t rate = audio_.sampleRate();
-    const uint32_t total = (rate * (uint32_t)ms) / 1000u;
-    uint32_t phase = 0;
-    const uint32_t step = (uint32_t)(((uint64_t)hz << 32) / rate);
-    uint32_t done=0;
-    while (done < total) {
-      size_t n = (total - done < FRAMES) ? (size_t)(total - done) : FRAMES;
-      for (size_t i=0;i<n;i++) {
-        float a=(float)(phase) * (2.0f * PI / 4294967296.0f);
-        int16_t s=(int16_t)(sinf(a)*9000.0f);
-        pcm[i*2]=s; pcm[i*2+1]=s; phase += step;
-      }
-      audio_.enqueue((const uint8_t*)pcm, n*4u, pdMS_TO_TICKS(100));
-      done += n;
-      delay(1);
-    }
   }
 
 public:
   void setup() override {
+    zeroConf_.begin(deviceName_, 80);
+    server.on(F("/spotify_info"), HTTP_ANY, [this](AsyncWebServerRequest* request) {
+      zeroConf_.handleRequest(request);
+    });
     server.on(F("/spotify-test"), HTTP_GET, [this](AsyncWebServerRequest* request) {
       if (!enabled_) { request->send(409, FPSTR(CONTENT_TYPE_PLAIN), F("Spotify usermod disabled")); return; }
       if (!ready_) { request->send(409, FPSTR(CONTENT_TYPE_PLAIN), String(F("Audio not ready: ")) + audio_.lastError()); return; }
-      uint16_t hz=1000, ms=1500;
-      if (request->hasParam("hz")) hz=(uint16_t)constrain(request->getParam("hz")->value().toInt(),20,10000);
-      if (request->hasParam("ms")) ms=(uint16_t)constrain(request->getParam("ms")->value().toInt(),50,5000);
-      playTestTone(hz,ms);
-      request->send(200, FPSTR(CONTENT_TYPE_PLAIN), F("ok"));
+      if (!request->hasParam("action")) {
+        request->send(400, FPSTR(CONTENT_TYPE_PLAIN), F("Use ?action=start&tone=1000, ?action=start-pcm&tone=1000 or ?action=stop"));
+        return;
+      }
+      const String action = request->getParam("action")->value();
+      if (action == "start") {
+        uint16_t hz = 1000;
+        if (request->hasParam("tone")) hz = (uint16_t)constrain(request->getParam("tone")->value().toInt(), 20, 10000);
+        pcmTest_.stop();
+        audio_.flushPcm();
+        audio_.startTestTone(hz);
+        request->send(200, FPSTR(CONTENT_TYPE_PLAIN), String(F("started direct ")) + hz + F(" Hz; runs until action=stop"));
+        return;
+      }
+      if (action == "start-pcm") {
+        uint16_t hz = 1000;
+        if (request->hasParam("tone")) hz = (uint16_t)constrain(request->getParam("tone")->value().toInt(), 20, 10000);
+        audio_.stopTestTone();
+        audio_.flushPcm();
+        if (!pcmTest_.start(audio_, hz)) {
+          request->send(500, FPSTR(CONTENT_TYPE_PLAIN), F("PCM 44.1 kHz test source failed to start"));
+          return;
+        }
+        request->send(200, FPSTR(CONTENT_TYPE_PLAIN), String(F("started cspot-like PCM 44100 Hz source, tone=")) + hz + F(" Hz; runs until action=stop"));
+        return;
+      }
+      if (action == "stop") {
+        pcmTest_.stop();
+        audio_.stopTestTone();
+        audio_.flushPcm();
+        request->send(200, FPSTR(CONTENT_TYPE_PLAIN), F("stopped"));
+        return;
+      }
+      request->send(400, FPSTR(CONTENT_TYPE_PLAIN), F("Unknown action"));
     });
     if (enabled_) { initPending_=true; initSince_=millis(); }
   }
 
   void loop() override {
     if (!enabled_) return;
+    zeroConf_.loop(deviceName_);
     if (initPending_ && millis()-initSince_ > 2500u) {
-      initPending_=false; startAudio();
+      initPending_=false;
+      startAudio();
     }
   }
 
@@ -109,24 +117,48 @@ public:
     if (user.isNull()) user=root.createNestedObject("u");
     JsonArray v=user.createNestedArray(F("Spotify Connect"));
     v.add(String(F("v"))+USERMOD_VERSION+F("-")+USERMOD_REVISION);
+
     JsonArray s=user.createNestedArray(F("Spotify state"));
     if (!enabled_) s.add(F("disabled"));
     else if (!ready_ && selectClockMode() == ClockMode::WaitingSharedClock) s.add(F("waiting: AudioReactive owns clocks but LRCK inactive"));
     else if (!ready_) s.add(String(F("audio not ready: "))+audio_.lastError());
-    else s.add(F("audio gate ready (cspot transport pending dev.2)"));
+    else s.add(F("audio ready | Spotify Zeroconf discovery gate"));
+
+    JsonArray z=user.createNestedArray(F("Spotify Zeroconf"));
+    z.add(String(F("state=")) + zeroConf_.stateName() + F(" | cpath=") + zeroConf_.cpath());
+    z.add(String(F("mdns=")) + (zeroConf_.advertised() ? F("advertised") : F("pending")) +
+          F(" attempts=") + zeroConf_.advertiseAttempts() + F(" getInfo=") + zeroConf_.getInfoRequests() +
+          F(" addUser=") + zeroConf_.addUserRequests() + F(" rejected=") + zeroConf_.rejectedAddUserRequests());
+    z.add(String(F("deviceId=")) + zeroConf_.deviceId() + F(" | auth=next milestone pending"));
+
     JsonArray a=user.createNestedArray(F("Spotify audio"));
-    auto t=audio_.telemetry();
+    const auto t=audio_.telemetry();
     a.add(String(audio_.sharedClockMode() ? F("I2S1 slave/shared") : F("I2S1 master/standalone")) +
-          F(" | ") + audio_.sampleRate() + F(" Hz | 16-bit stereo | ES8311 | volume=") + volume_ +
-          F(" | buffered=") + audio_.bufferedBytes());
+          F(" | ") + audio_.sampleRate() + F(" Hz | source 16-bit stereo -> output ") + audio_.outputBitsPerSample() +
+          F("-bit | ES8311 | volume=") + volume_ + F(" | buffered=") + audio_.bufferedBytes());
     a.add(String(F("AR pin ownership=")) + (audioReactiveOwnsAnyClock() ? F("present") : F("none")) +
           F(" | LRCK=") + (sharedLrckActive() ? F("active") : F("inactive")) +
-          F(" | policy=shared-slave when owned+clocked"));
+          F(" | policy=shared 32-bit slave when owned+clocked"));
     a.add(String(F("ring=")) + (audio_.ringInPsram() ? F("psram") : F("internal-fallback")) +
           F(" cap=") + audio_.ringCapacityBytes() + F(" highWater=") + t.highWaterBytes +
           F(" internalHeap=") + t.internalHeapBefore + F("->") + t.internalHeapAfter);
-    a.add(String(F("writes="))+t.writes+F(" err=")+t.writeErrors+F(" short=")+t.shortWrites+
-          F(" underrun=")+t.underruns+F(" maxWriteUs=")+t.maxWriteUs);
+    a.add(String(F("DMA ")) + SpotifyAudioConfig::DMA_BUFFER_COUNT + F("x") + SpotifyAudioConfig::DMA_FRAMES +
+          F(" coverage=") + t.dmaCoverageUs + F("us | writes=") + t.writes + F(" err=") + t.writeErrors +
+          F(" short=") + t.shortWrites);
+    a.add(String(F("timing maxWrite=")) + t.maxWriteUs + F("us maxGap=") + t.maxTaskGapUs +
+          F("us late=") + t.lateWrites + F(" core0=") + t.core0Runs + F(" core1=") + t.core1Runs +
+          F(" stackMin=") + t.stackMinFree);
+    a.add(String(F("testTone=")) + (audio_.testToneActive() ? F("on") : F("off")) +
+          F(" hz=") + audio_.testToneHz() + F(" frames=") + t.testToneFrames +
+          F(" | idleSilence=") + t.idleSilenceWrites + F(" ringUnderrun=") + t.ringUnderruns);
+    a.add(String(F("PCM ingress 44100->")) + audio_.sampleRate() +
+          F(" | inFrames=") + t.pcm44100InFrames + F(" outFrames=") + t.pcmStreamOutFrames +
+          F(" failures=") + t.pcmIngressFailures + F(" flushes=") + t.ringFlushes);
+    const auto pt = pcmTest_.telemetry();
+    a.add(String(F("pcmTest=")) + (pcmTest_.active() ? F("on") : F("off")) +
+          F(" hz=") + pcmTest_.frequencyHz() + F(" generated=") + pt.generatedFrames +
+          F(" feedCalls=") + pt.feedCalls + F(" feedFail=") + pt.feedFailures +
+          F(" maxFeed=") + pt.maxFeedUs + F("us stackMin=") + pt.stackMinFree);
   }
 
   void addToConfig(JsonObject& root) override {
@@ -139,20 +171,27 @@ public:
   bool readFromConfig(JsonObject& root) override {
     JsonObject top=root[F("Spotify Connect")];
     if (top.isNull()) return false;
-    bool old=enabled_;
+    const bool old=enabled_;
     getJsonValue(top[F("Enabled")], enabled_);
     const char* dn=top[F("Device name")];
     if (dn) strlcpy(deviceName_, dn, sizeof(deviceName_));
-    int vol=volume_; getJsonValue(top[F("Volume")], vol); volume_=constrain(vol,0,100);
+    int vol=volume_;
+    getJsonValue(top[F("Volume")], vol);
+    volume_=(uint8_t)constrain(vol,0,100);
     if (ready_) audio_.setVolume(volume_);
-    if (old && !enabled_) { audio_.end(); ready_=false; }
+    if (old && !enabled_) { pcmTest_.stop(); audio_.stopTestTone(); audio_.end(); ready_=false; }
     if (!old && enabled_) { initPending_=true; initSince_=millis(); }
     return true;
   }
 
-  // Temporary test hook usable from another local usermod or one-line patch.
-  void testTone(uint16_t hz=1000, uint16_t ms=1500) { playTestTone(hz,ms); }
-
+  void appendConfigData() override {
+    // Keep internal config keys out of the visible WLED UI. WLED generates a
+    // normal numeric input for Volume; keep it as the form backing field but
+    // hide it and expose exactly one 0..100 slider tied to the same value.
+    oappend(F("rl=(n,t)=>{let a=d.getElementsByName(n),e=a[0];if(!e)return;let x=e.previousSibling;if(x&&x.nodeType==3)x.nodeValue=' '+t+' '};"));
+    oappend(F("rl('Spotify Connect:Enabled','Enabled:');rl('Spotify Connect:Device name','Device Name:');rl('Spotify Connect:Volume','Volume:');"));
+    oappend(F("(()=>{let n='Spotify Connect:Volume',a=Array.from(d.getElementsByName(n));if(!a.length)return;let b=a[a.length-1],p=b.parentNode;a.forEach(e=>e.style.display='none');let r=d.getElementById('spotifyVolRange');if(!r){r=d.createElement('input');r.id='spotifyVolRange';r.type='range';r.min='0';r.max='100';r.step='1';r.style.width='180px';p.insertBefore(r,b)}r.value=b.value;let s=d.getElementById('spotifyVolPct');if(!s){s=d.createElement('span');s.id='spotifyVolPct';s.style.marginLeft='8px';p.insertBefore(s,b)}let u=()=>{a.forEach(e=>e.value=r.value);s.textContent=r.value+'%'};r.oninput=u;u()})();"));
+  }
 };
 
 static UsermodSpotifyConnect spotifyConnectUsermod;
