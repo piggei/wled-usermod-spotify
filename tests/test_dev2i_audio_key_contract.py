@@ -52,7 +52,7 @@ assert "AudioKey candidate=" in ui
 assert "AudioKey candidates" in ui
 assert "keyBytes=" in ui
 assert "audioKeyHex" not in ui
-assert 'USERMOD_VERSION = "0.1.0-dev.2l-ap-stream"' in ui
-assert 'USERMOD_REVISION = "r1"' in ui
-assert "ProductInfo headFiles=0 -> AP StreamChunk 4KiB encrypted canary" in ui
+assert 'USERMOD_VERSION = "0.1.0-dev.2m-key-block"' in ui
+assert 'USERMOD_REVISION = "r14"' in ui
+assert "one RequestKey diagnostic scan per session -> media-key service-block latch/suppression -> qualified AP StreamChunk canary" in ui
 print("dev.2i-r2 audio-key candidate diagnostics contract: PASS")

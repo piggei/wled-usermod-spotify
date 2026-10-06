@@ -8,8 +8,8 @@ LIB_ARCHIVE	prebuild	required	file_contains	library.json	"libArchive": false	Pla
 LIB_SRCDIR	prebuild	required	file_contains	library.json	"srcDir": "."	library source root is repository root
 LIB_AUDIO	prebuild	required	file_contains	library.json	+<audio/*.cpp>	audio translation units are included
 LIB_SPOTIFY	prebuild	required	file_contains	library.json	+<spotify/*.cpp>	Spotify translation units are included
-BUILD_LINE	prebuild	required	file_contains	usermod_spotify_connect.h	USERMOD_VERSION = "0.1.0-dev.2l-ap-stream"	functional development line is dev.2l bounded AP StreamChunk canary
-BUILD_REV	prebuild	required	file_contains	usermod_spotify_connect.h	USERMOD_REVISION = "r1"	revision marker is r1
+BUILD_LINE	prebuild	required	file_contains	usermod_spotify_connect.h	USERMOD_VERSION = "0.1.0-dev.2m-key-block"	functional development line is dev.2m media-key service-block hardening
+BUILD_REV	prebuild	required	file_contains	usermod_spotify_connect.h	USERMOD_REVISION = "r14"	revision marker is r14
 ZEROCONF_GATE	prebuild	required	tree_contains	.	spotify-connect	Spotify mDNS discovery service is retained
 AUDIO_POLICY	prebuild	required	tree_contains	.	policy=shared 32-bit slave when owned+clocked	qualified 32-bit shared-I2S policy is retained
 PCM_INGRESS	prebuild	required	tree_contains	.	enqueuePcm44100	cspot-facing 44.1 kHz PCM ingress is present
@@ -60,7 +60,7 @@ SESSION_LOGIN_CMD	prebuild	required	file_contains	spotify/SpotifySessionProbe.cp
 SESSION_WELCOME_CMD	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp	AUTH_SUCCESSFUL_COMMAND = 0xACu	Spotify APWelcome command 0xAC is present
 SESSION_DECLINE_CMD	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp	AUTH_DECLINED_COMMAND = 0xADu	Spotify APLoginFailed command 0xAD is present
 SESSION_CREDENTIAL_GETTERS	prebuild	required	file_contains	spotify/SpotifyZeroConfProbe.h	const std::vector<uint8_t>& authData() const	qualified cached credential is exposed only to the AP session gate
-SESSION_SCOPE	prebuild	required	file_contains	usermod_spotify_connect.h	scope=metadata -> RequestKey diagnostics -> ProductInfo headFiles=0 -> AP StreamChunk 4KiB encrypted canary; decrypt/decoder remain closed	scope is limited to a 4 KiB encrypted media reachability canary over the qualified AP/Shannon session
+SESSION_SCOPE	prebuild	required	file_contains	usermod_spotify_connect.h	scope=metadata -> one RequestKey diagnostic scan per session -> media-key service-block latch/suppression -> qualified AP StreamChunk canary; decrypt/decoder remain closed	scope hardens one key scan per session while retaining the qualified AP/Shannon media canary
 THIRD_PARTY_CSPOT	prebuild	required	file_contains	THIRD_PARTY_NOTICES.md	GPL-3.0-or-later	cspot licensing note is accurate and does not repeat the earlier MIT assumption
 THIRD_PARTY_SHANNON	prebuild	required	file_contains	THIRD_PARTY_NOTICES.md	independent C++ implementation	Shannon implementation provenance is documented
 SESSION_PERSIST_CONTRACT	prebuild	required	python_script	tests/test_dev2f_session_contract.py	exit=0	persistent Shannon/Mercury protocol contract passes
@@ -106,6 +106,13 @@ DEV2J_HEAD_RANGE	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp
 DEV2J_NO_HTTPS_DEP	prebuild	required	file_not_contains	spotify/SpotifySessionProbe.cpp	WiFiClientSecure.h	media-head gate does not reintroduce unqualified Arduino secure-client headers
 DEV2J_HEAD_UI	prebuild	required	file_contains	usermod_spotify_connect.h	MediaHead attempts=	bounded media-head status is exposed without URL/body/key material
 DEV2K_CONTRACT	prebuild	required	python_script	tests/test_dev2k_spclient_tls_contract.py	exit=0	historical native-TLS unavailability classification remains guarded
+DEV2M_CONTRACT	prebuild	required	python_script	tests/test_dev2m_key_block_contract.py	exit=0	media-key service-block latch/suppression source contract passes
+DEV2M_R13_TIMING	prebuild	required	python_script	tests/test_dev2m_r13_latency_telemetry.py	exit=0	measurement-only direct-selection timing and suppressed-scan telemetry
+DEV2M_R14_POLL	prebuild	required	python_script	tests/test_dev2m_r14_poll_optimization.py	exit=0	conservative 250 ms to 50 ms AP receive-poll optimization only
+DEV2M_R12_QUEUE_IDENTITY	prebuild	required	python_script	tests/test_dev2m_r12_queue_identity.py	exit=0	GID-only TrackRefs canonicalize to Spotify URIs and context indices remain identity-validated only
+DEV2M_BLOCK_LATCH	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp	allRejected01	all-candidate 0x0e/0:1 scan is recognized as the current service block
+DEV2M_SUPPRESS	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp	Spotify media key service-blocked; RequestKey suppressed	later tracks suppress redundant RequestKey scans in the same started session
+DEV2M_UI	prebuild	required	file_contains	usermod_spotify_connect.h	MediaKey state=	media-key latch and suppression counters are exposed without secret material
 STATIC_PY	prebuild	required	python_script	tests/test_static.py	exit=0	static source regression suite passes including SPIRC activation integration
 SPIRC_URI_PREFIX	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp	uri.startsWith(subscriptionUri)	SPIRC descendant remote-user URIs are dispatched
 SESSION_RX_DIAG	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp	readFailStage	Shannon live-read failure stage is diagnosed
@@ -117,26 +124,73 @@ DEV2L_STREAM_REQ	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp
 DEV2L_STREAM_RESP	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp	STREAM_CHUNK_SUCCESS_COMMAND = 0x09u	AP StreamChunk success response is handled
 DEV2L_STREAM_ERR	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp	STREAM_CHUNK_FAILURE_COMMAND = 0x0Au	AP StreamChunk error response is handled
 DEV2L_STREAM_BOUND	prebuild	required	file_contains	spotify/SpotifySessionProbe.h	AP_STREAM_CANARY_BYTES = 4096u	AP stream canary is bounded to 4 KiB
+DEV2L_STREAM_PROBES	prebuild	required	file_contains	spotify/SpotifySessionProbe.h	AP_STREAM_PROBE_COUNT = 3u	AP stream r2 runs three serial bounded ranges
+DEV2L_CLOSE_CLASSIFY	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp	apStreamPostCompletePackets_	AP stream trailing close/late packets are explicitly classified
 DEV2L_NO_ESP_TLS	prebuild	required	file_not_contains	spotify/SpotifySessionProbe.cpp	esp_http_client_perform	known-unlinkable native ESP-IDF TLS path is absent from active source
-FW_VERSION	postbuild	required	firmware_contains	firmware	0.1.0-dev.2l-ap-stream	firmware contains dev.2l AP stream marker
-FW_REVISION	postbuild	required	firmware_contains	firmware	r1	firmware contains revision marker
-FW_ZEROCONF	postbuild	required	firmware_contains	firmware	Spotify AP stream gate	firmware contains AP stream gate marker
+DEV2M_SPIRC_BLOCKED_NOTIFY	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp	sendSpircBlockedNotify	service-blocked state emits a coherent Notify without exposing key material
+DEV2M_SPIRC_LOAD_HYGIENE	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp	spircEmptyLoadsIgnored_	empty Load retry storm is filtered
+DEV2M_SPIRC_TRACK_QUEUE	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp	appendMessageField(state, 27u, trackRef)	current SPIRC State mirrors repeated field-27 TrackRef queue
+DEV2M_SPIRC_QUEUE_PERSIST	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp	current.trackRefs = spircStateTrackRefs_	blocked Notify reuses the retained controller queue
+DEV2M_SPIRC_NO_OBSOLETE_URI	prebuild	required	file_not_contains	spotify/SpotifySessionProbe.cpp	appendStringField(state, 1u, trackUri)	obsolete current-State field-1 URI encoding is absent
+DEV2M_SPIRC_QUEUE_UI	prebuild	required	file_contains	usermod_spotify_connect.h	SPIRC state tracks=	retained queue count/bytes diagnostics are exposed
+DEV2M_SPIRC_COMMAND_ACK_CAP	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp	addIntCapability(10u, 1)	classic SPIRC command acknowledgements are advertised
+DEV2M_SPIRC_COMMAND_ACK_STATE	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp	appendVarintField(state, 21u, remote.lastCommandMsgid)	Notify state acknowledges targeted controller command sequence
+DEV2M_SPIRC_NEXT	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp	SPIRC_NEXT = 0x1Au	classic SPIRC Next command is recognized
+DEV2M_SPIRC_CONTROL_UI	prebuild	required	file_contains	usermod_spotify_connect.h	SPIRC control Notify sent=	controller command/ack diagnostics are exposed
+DEV2M_SPIRC_PLAY_DECOUPLE	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp	current.playStatus = (spircLastLoadStatus_ == 1u) ? 1u : 2u	media-key service block no longer forces controller playback back to Pause
+DEV2M_SPIRC_PLAY_SELECT	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp	++spircPlaySelectFrames_	direct queue selection carried in Play state is handled
+DEV2M_SPIRC_PLAYBACK_UI	prebuild	required	file_contains	usermod_spotify_connect.h	SPIRC playback status=	virtual playback state/clock telemetry is exposed
+FW_SPIRC_BLOCKED_NOTIFY	postbuild	required	firmware_contains	firmware	SPIRC blocked Notify attempts=	firmware contains blocked-state Notify diagnostics
+FW_SPIRC_STATE_QUEUE	postbuild	required	firmware_contains	firmware	SPIRC state tracks=	firmware contains current-SPIRC queue diagnostics
+FW_SPIRC_CONTROL	postbuild	required	firmware_contains	firmware	SPIRC control Notify sent=	firmware contains SPIRC controller command/ack diagnostics
+FW_VERSION	postbuild	required	firmware_contains	firmware	0.1.0-dev.2m-key-block	firmware contains dev.2m media-key hardening marker
+FW_REVISION	postbuild	required	firmware_contains	firmware	r14	firmware contains revision marker
+FW_ZEROCONF	postbuild	required	firmware_contains	firmware	Spotify media-key hardening gate	firmware contains media-key hardening marker
 FW_AUDIO_POLICY	postbuild	required	firmware_contains	firmware	policy=shared 32-bit slave when owned+clocked	firmware contains qualified shared-I2S policy
 FW_PCM_INGRESS	postbuild	required	firmware_contains	firmware	PCM ingress 44100->	firmware contains PCM ingress diagnostics
 FW_LOGINBLOB	postbuild	required	firmware_contains	firmware	LoginBlob attempts=	firmware contains LoginBlob diagnostics
-FW_SESSION	postbuild	required	firmware_contains	firmware	scope=metadata -> RequestKey diagnostics -> ProductInfo headFiles=0 -> AP StreamChunk 4KiB encrypted canary; decrypt/decoder remain closed	firmware contains dev.2l bounded AP stream scope
+FW_SESSION	postbuild	required	firmware_contains	firmware	scope=metadata -> one RequestKey diagnostic scan per session -> media-key service-block latch/suppression -> qualified AP StreamChunk canary; decrypt/decoder remain closed	firmware contains dev.2m media-key hardening scope
 FW_KEEPALIVE	postbuild	required	firmware_contains	firmware	keepalive ping=	firmware contains persistent keepalive diagnostics
 FW_MERCURY	postbuild	required	firmware_contains	firmware	Mercury SUB attempts=	firmware contains Mercury diagnostics
 FW_SPIRC	postbuild	required	firmware_contains	firmware	SPIRC hello attempts=	firmware contains SPIRC activation diagnostics
 FW_TRACKREF	postbuild	required	firmware_contains	firmware	TrackRef index=	firmware contains selected track reference diagnostics
 FW_METADATA	postbuild	required	firmware_contains	firmware	Metadata GET attempts=	firmware contains track metadata diagnostics
 FW_AUDIO_KEY	postbuild	required	firmware_contains	firmware	AudioKey requests=	firmware contains audio-key diagnostics
+FW_MEDIA_KEY_STATE	postbuild	required	firmware_contains	firmware	MediaKey state=	firmware contains dev.2m media-key block/suppression diagnostics
 FW_AUDIO_KEY_CANDIDATES	postbuild	required	firmware_contains	firmware	AudioKey candidates	firmware contains dev.2i-r2 candidate diagnostics
 FW_PRODUCT_INFO	postbuild	required	firmware_contains	firmware	ProductInfo packets=	firmware contains ProductInfo/head-url diagnostics
 FW_MEDIA_HEAD	postbuild	required	firmware_contains	firmware	MediaHead attempts=	firmware contains bounded media-head diagnostics
-FW_AUDIO_KEY_SCOPE	postbuild	required	firmware_contains	firmware	scope=metadata -> RequestKey diagnostics -> ProductInfo headFiles=0 -> AP StreamChunk 4KiB encrypted canary; decrypt/decoder remain closed	firmware contains dev.2l bounded AP stream scope
+FW_AUDIO_KEY_SCOPE	postbuild	required	firmware_contains	firmware	scope=metadata -> one RequestKey diagnostic scan per session -> media-key service-block latch/suppression -> qualified AP StreamChunk canary; decrypt/decoder remain closed	firmware contains dev.2m media-key hardening scope
 FW_NO_OLD_AR_BLOCK	postbuild	required	firmware_not_contains	firmware	blocked: AudioReactive owns shared I2S clocks	firmware does not contain obsolete AudioReactive blocker
 FW_NO_OLD_LRCK_BLOCK	postbuild	required	firmware_not_contains	firmware	blocked: shared LRCK active (AudioReactive/I2S0)	firmware does not contain obsolete LRCK blocker
 FW_AP_STREAM	postbuild	required	firmware_contains	firmware	AP Stream attempts=	firmware contains AP StreamChunk counters
 FW_AP_STREAM_DETAIL	postbuild	required	firmware_contains	firmware	AP Stream channel=	firmware contains AP StreamChunk channel diagnostics
 FW_AP_STREAM_ERROR	postbuild	required	firmware_contains	firmware	AP Stream lastError=	firmware contains AP StreamChunk classified error diagnostics
+DEV2M_SPIRC_CONTEXT_PLAYER_PARSE	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp	parseContextPlayerState	bounded classic context_player_state parser exists
+DEV2M_SPIRC_CONTEXT_PLAYER_SELECT	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp	resolveContextPlayerSelection	context-player skip target is resolved against retained queue
+DEV2M_SPIRC_REPLACE	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp	SPIRC_REPLACE	classic Replace frames are classified and ACKed safely
+DEV2M_CONTEXT_PLAYER_TELEMETRY	prebuild	required	file_contains	usermod_spotify_connect.h	SPIRC contextPlayer frames=	context-player direct-selection telemetry is exposed
+DEV2M_NO_PLAYLIST_V2_CLAIM	prebuild	required	file_not_contains	spotify/SpotifySessionProbe.cpp	addIntCapability(13u, 1)	classic receiver does not falsely advertise the unimplemented playlist-v2 command contract
+DEV2M_CONTEXT_PLAYER_PROTO	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp	parseModernContextPlayerState	current binary ContextPlayerState identity/index fields are parsed boundedly
+DEV2M_CONTEXT_PLAYER_ENCODING_UI	prebuild	required	file_contains	usermod_spotify_connect.h	encoding=	context-player JSON/protobuf classification is exposed without raw payload
+DEV2M_CONTEXT_PLAYER_OPAQUE_DIAG	prebuild	required	file_contains	usermod_spotify_connect.h	SPIRC contextDiag lastBytes=	opaque field-19 shape is exposed only as bounded diagnostics
+DEV2M_CONTEXT_PLAYER_QUEUE_SCAN	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp	spircContextPlayerQueueMatches_	opaque context-player payload is correlated against retained queue identities
+DEV2M_CONTEXT_PLAYER_SAFE_SELECT	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp	nonCurrent == 1u	opaque correlation only selects a unique non-current queue entry
+DEV2M_CONTEXT_PLAYER_NO_RAW_UI	prebuild	required	file_not_contains	usermod_spotify_connect.h	contextPlayerState.data()	raw context-player payload is never serialized to json info
+FW_CONTEXT_PLAYER_DIAG	postbuild	required	firmware_contains	firmware	SPIRC contextDiag lastBytes=	firmware contains opaque context-player diagnostics
+FW_CONTEXT_PLAYER_SCAN	postbuild	required	firmware_contains	firmware	SPIRC contextScan queueMatches=	firmware contains bounded queue-correlation diagnostics
+DEV2M_CONTEXT_GZIP_MINIZ	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp	tinfl_decompress(	gzip field-19 uses bounded low-level ESP ROM miniz raw-DEFLATE inflate
+DEV2M_CONTEXT_GZIP_BOUND	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp	MAX_CONTEXT_PLAYER_INFLATED_BYTES	decompressed field-19 has an explicit hard size bound
+DEV2M_CONTEXT_GZIP_CRC	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp	mz_crc32(MZ_CRC32_INIT	gzip trailer CRC is verified before parsing
+DEV2M_CONTEXT_GZIP_UI	prebuild	required	file_contains	usermod_spotify_connect.h	SPIRC contextInflate attempts=	gzip decode telemetry is exposed without raw content
+FW_CONTEXT_PLAYER_INFLATE	postbuild	required	firmware_contains	firmware	SPIRC contextInflate attempts=	firmware contains bounded gzip field-19 decode diagnostics
+DEV2M_CONTEXT_GZIP_FIXTURE	prebuild	required	python_script	tests/test_dev2m_gzip_fixture.py	exit=0	gzip envelope/raw-DEFLATE/CRC fixture passes
+
+DEV2M_CONTEXT_GZIP_HEAP_STATE	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp	heap_caps_malloc(sizeof(tinfl_decompressor), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)	miniz decompressor state is kept off the Spotify AP task stack
+DEV2M_CONTEXT_JSON_KEY_SCAN	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp	findJsonKeyValueStart	decoded JSON selection uses whitespace-tolerant key scanning
+DEV2M_CONTEXT_JSON_OBJECT	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp	findEnclosingJsonObject	track_uid maps only within its enclosing JSON track object
+DEV2M_CONTEXT_JSON_SKIP_TO	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp	findJsonKeyValueStart(data, size, "skip_to", skipValue)	direct row selection parses the bounded skip_to object structurally
+
+DEV2M_CONTEXT_QUEUE_UI	prebuild	required	file_contains	usermod_spotify_connect.h	SPIRC contextQueue refs=	canonical classic-queue identity telemetry is exposed without identifiers
+DEV2M_CONTEXT_SKIP_UI	prebuild	required	file_contains	usermod_spotify_connect.h	SPIRC contextSkip objects=	multi-skip JSON target-resolution telemetry is exposed
+FW_CONTEXT_SKIP	postbuild	required	firmware_contains	firmware	SPIRC contextSkip objects=	firmware contains multi-skip target-resolution diagnostics

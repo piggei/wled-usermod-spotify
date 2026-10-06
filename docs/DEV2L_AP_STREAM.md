@@ -1,38 +1,52 @@
-# dev.2l - bounded AP StreamChunk canary
+# dev.2l - bounded AP StreamChunk transport gate
 
-## Purpose
+## r1 hardware result
 
-Test whether encrypted AudioFile bytes can still be obtained through the already authenticated Access Point/Shannon session, independently of both the account-specific AudioKey failure and the target framework's unavailable TLS engine.
+`v0.1.0-dev.2l-ap-stream-r1` reached the AP media channel on real Waveshare hardware. For the preferred format-1 AudioFile the receiver sent one 46-byte command `0x08` request for 4096 bytes and received command `0x09` channel traffic with three header records, a reported encrypted file size of 4,380,916 bytes and exactly 4096 media bytes. Shannon remained clean (`macFail=0`), the request had no timeout/protocol error, and the frozen I2S backend remained error-free.
 
-## Protocol basis
+The r1 `stale=1` is strongly consistent with a telemetry artifact: r1 declared success immediately after observing the requested 4096 data bytes, so a trailing channel-close packet would arrive after local `pending` had already been cleared and be counted as stale. r2 waits for explicit close so this interpretation is verified rather than assumed.
 
-Historical librespot implementations used AP command `0x08` to request an audio range. The response channel is identified by a big-endian `u16`; AP command `0x09` carries headers/data and `0x0a` is a channel error. The historical request payload is 46 bytes and carries fixed protocol fields, the 20-byte AudioFile id, then start/end offsets expressed in 4-byte words. This project reimplements only this small wire contract; no third-party source code is vendored.
+## r2 hardware result
 
-The canary asks for offset 0, size 1024 words = 4096 bytes.
+`v0.1.0-dev.2l-ap-stream-r2` passed the sequential range gate on real Waveshare hardware. For `Close My Eyes Forever` (preferred format 1), telemetry reported `attempts=3 ok=3 failures=0 timeouts=0 protoErr=0 stale=0 postComplete=0 pending=no`, `probe=3/3`, `offset=8192`, `totalRequested=12288`, `dataBytes=12288`, three data packets and nine response packets. The reported encrypted file size was 5,564,912 bytes. Shannon remained clean (`macFail=0`) and the frozen I2S backend remained error-free.
 
-## Response parser
+This confirms that r1's `stale=1` was a local completion-order artifact: waiting for explicit channel close eliminates it without special-casing or dropping valid channel traffic.
 
-A `0x09` payload begins with the channel id. Before media data, header records are encoded as `BE16 length`, one-byte header id, and `length-1` data bytes. A zero length terminates the header phase. Header `0x03`, when exactly four data bytes long, is interpreted as a file size in 4-byte words for diagnostics only. Subsequent channel payload is counted and discarded. An empty packet in data state closes the channel.
+## r2 purpose
 
-The implementation does not allocate a media-sized buffer. It retains only counters and framing state. A successful reachability canary is declared once at least the requested 4096 data bytes have been observed, or when the channel closes after returning nonzero data.
+Qualify repeated bounded range access without buffering media and remove the r1 close-packet ambiguity. r2 requests three consecutive 4096-byte ranges from the preferred AudioFile:
 
-## Safety and isolation
+- probe 0: byte offset 0
+- probe 1: byte offset 4096
+- probe 2: byte offset 8192
 
-- One canary per selected track.
-- Preferred metadata AudioFile candidate only.
-- 4096 requested bytes, 5 second response timeout.
-- Track changes cancel local pending state and late packets are counted as stale.
-- No AES key, AudioFile body, expanded URL or reusable credential is exposed in `/json/info`.
-- No decrypt, container parser, decoder or PCM feed in this gate.
-- No `esp_http_client`, `esp_tls`, `WiFiClientSecure` or `NetworkClientSecure`.
+Each probe uses a fresh AP channel id and is sent only after the preceding channel has explicitly closed. Total requested media is 12,288 bytes. Media bytes are counted and discarded immediately.
 
-## Hardware classification
+## Protocol contract
 
-Expected outcomes are deliberately non-ambiguous:
+The small historical wire contract remains unchanged:
 
-- `ok>=1`, `dataBytes>0`: AP encrypted-media transport reachable.
-- `lastCmd=0xa`, `failures>=1`: Spotify explicitly rejects the AP media channel; record `failureCode`.
-- `timeouts>=1`: no channel response before the bounded timeout.
-- `protoErr>=1`: response framing differs from the historical contract; do not conflate this with a service rejection.
+- request command `0x08`
+- success/data command `0x09`
+- channel error command `0x0a`
+- 46-byte request: BE16 channel id, fixed fields, 20-byte AudioFile id, then start/end offsets in 4-byte words
 
-In every case verify `Shannon macFail=0` and the frozen audio regression separately.
+A `0x09` payload begins with the channel id. Header records use `BE16 length`, one-byte header id, and `length-1` data bytes. Zero length terminates the header phase. Header `0x03` with four data bytes is interpreted only as file size in protocol words for diagnostics.
+
+## r2 close semantics
+
+r2 no longer declares a range successful merely because 4096 bytes have arrived. It waits for the explicit empty data-state channel packet, then requires at least 4096 bytes for that probe before incrementing `ok` and starting the next range. Packets for an already completed channel are classified as `postComplete`, not `stale`.
+
+A fully successful run should therefore show approximately:
+
+```text
+AP Stream attempts=3 ok=3 failures=0 timeouts=0 protoErr=0 stale=0 ... pending=no
+AP Stream ... requested=4096 totalRequested=12288 probe=3/3 offset=8192 ...
+AP Stream ... dataBytes=12288 format=1
+```
+
+`responsePackets`, header counters and data-packet counters are aggregate across the three probes.
+
+## Isolation
+
+The gate still does not perform AES decryption, container parsing, decoding or PCM feed. It does not add TLS, Login5, client-token or CDN access. RequestKey and `audio/WavesharePcmOutput.*` remain unchanged. No AES key, AudioFile body or reusable credential is exposed in `/json/info`.

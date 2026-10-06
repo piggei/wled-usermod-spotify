@@ -82,3 +82,36 @@ implement any of those authentication or storage operations.
 ## AP StreamChunk protocol provenance (dev.2l)
 
 The dev.2l StreamChunk code is an independent C++ implementation of protocol facts cross-checked against historical librespot source and public interoperability reports: request command `0x08`, response `0x09`, channel error `0x0a`, 16-bit channel correlation, 46-byte request layout and the length-prefixed channel-header framing. No librespot or cspot source code is copied into this repository. Preserve librespot's upstream licensing notices when consulting or redistributing upstream material; do not vendor GPL-3.0-or-later cspot code into this project without an explicit licensing decision.
+
+## Media-key service-block hardening (dev.2m)
+
+The dev.2m session latch is project-local control logic derived from hardware observations: it recognizes only the exact all-candidate `AesKeyError 0:1` condition independently reproduced by current librespot for the same account. It does not copy or vendor librespot/cspot implementation code and does not derive, expose or persist Spotify media keys.
+
+
+## SPIRC State queue interoperability (dev.2m-r3)
+
+dev.2m-r3 corrects the project-local SPIRC protobuf encoder to match the current wire schema observed/documented by contemporary Spotify Connect implementations: the playback queue is carried as repeated `State.track` / field 27 `TrackRef` messages. The implementation preserves bounded raw TrackRef submessages received from the controller and mirrors them in its own Notify state; no third-party implementation code is copied or vendored. Legacy State fields previously assumed for track URI/duration are no longer emitted.
+
+
+## Classic SPIRC command acknowledgement interoperability (dev.2m-r4)
+
+dev.2m-r4 independently implements protocol facts present in the public SPIRC protobuf schema and historical Connect receiver behavior: MessageType values for Play/Pause/PlayPause/Seek/Prev/Next, repeated `Frame.recipient`, capability `kCommandAcks`, and State fields `last_command_ident`/`last_command_msgid`. The project-local handler uses these wire facts to filter targeted commands, acknowledge them and update its retained queue. No librespot/cspot implementation source is copied or vendored.
+
+
+## Current context-player protobuf / capability correction (dev.2m-r7)
+
+dev.2m-r7 was cross-checked against the public current librespot protocol schemas.
+`spirc.proto` declares `Frame.context_player_state` as bytes, while the current
+Esperanto player schema defines a binary `ContextPlayerState` carrying `ContextIndex`
+and `ProvidedTrack` / `ContextTrack` identity fields. The implementation below is a
+small independent protobuf field reader using the project's existing wire helpers; no
+librespot source is copied or linked.
+
+The build also stops advertising `kSupportsPlaylistV2`. This is a capability-honesty
+change: the project supports the qualified classic SPIRC queue/command path but not the
+full modern playlist-v2/connect-state command contract.
+
+
+## ESP32-S3 ROM miniz interface
+
+The dev.2m-r9a diagnostic path uses the `miniz.h` low-level `tinfl_decompress` interface supplied by the Espressif ESP-IDF/ESP32-S3 ROM support already present in the target framework. The decompressor state is heap-allocated so the high-level helper does not consume the Spotify AP task stack. No miniz source code is vendored in this repository. Espressif's `esp_rom` miniz interface is distributed as part of ESP-IDF under its upstream licensing terms (header currently SPDX Apache-2.0).

@@ -19,7 +19,8 @@ assert "SPIRC hello attempts=" in u and "SPIRC rx=" in u and "SPIRC remote ident
 assert "SPIRC transfer Notify attempts=" in u and "SPIRC Load tracks=" in u
 assert "sendSpircTransferNotify(info)" in s
 assert "spircLocalActive_ = true" in s
-assert "appendVarintField(state, 5u, 1u)" in s
+assert "appendVarintField(state, 5u, playStatus)" in s
+assert "remote.hasPlayStatus ? remote.playStatus : 1u" in s
 assert "get_audio_key" not in s
 assert "storage-resolve" not in s
 assert "Vorbis" not in s

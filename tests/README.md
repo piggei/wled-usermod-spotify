@@ -45,3 +45,26 @@ expectations have one authoritative location.
 no secure-client-header regression, and redacted media-head telemetry. Real
 ProductInfo scheme/status/body evidence remains a hardware gate in
 `hardware_checks.tsv`.
+
+### dev.2l-r2 manifest synchronization
+
+`test_dev2l_ap_stream_contract.py` also guards the postbuild firmware scope literals in `release_checks.tsv` against the runtime `/json/info` scope string. This prevents a stale release-manifest literal from producing a false required FAIL after an otherwise successful firmware build/flash.
+
+### dev.2m-r1 media-key service-block hardening
+
+`test_dev2m_key_block_contract.py` guards the narrow session latch: only an all-candidate `0x0e / 0:1` scan may mark the media key as service-blocked. Later tracks in the same started session suppress redundant RequestKey scans while keeping metadata/SPIRC and the already-qualified AP StreamChunk canary active. A fresh manual/auto session start clears the latch so service recovery can be re-evaluated.
+
+
+### dev.2m-r12 canonical queue identity
+
+`test_dev2m_r12_queue_identity.py` captures the real r11 GID/URI evidence with the observed GID `082fb9e25e8e48a79caa41a924af1574`, verifies that the qualified base62 conversion yields `spotify:track:0frKt739Ov9vvKS3JRu5Vi`, and models the 18-byte field-1-only TrackRef shape implied by `82 refs / 1476 bytes`. Source guards require GID-only TrackRefs to be canonicalized before URI matching, reject naked context `track_index` selection, and ensure bounded multi-skip JSON convergence runs before any first-target shortcut.
+
+
+### dev.2m-r13 timing telemetry
+
+`test_dev2m_r13_latency_telemetry.py` guards the measurement-only instrumentation added after r12 hardware-qualified direct selection. It requires local resolver/apply microsecond timing, metadata Mercury RTT timing, and an explicit `scan=suppressed` label for post-latch tracks. The original r13 hardware measurement used the then-frozen 250 ms poll.
+
+
+### dev.2m-r14 conservative AP receive poll
+
+`test_dev2m_r14_poll_optimization.py` guards the only scheduling change in r14: the idle AP receive poll is reduced from 250 ms to 50 ms while the r12 selection semantics and r13 timing instrumentation remain unchanged. The hardware gate is stability-first; latency improvement is desirable but not required.

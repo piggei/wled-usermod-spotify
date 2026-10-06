@@ -6,7 +6,20 @@
 #include <WiFiClient.h>
 #include <algorithm>
 #include <cstring>
+#include <utility>
 #include <esp_system.h>
+#if __has_include(<miniz.h>)
+#include <miniz.h>
+#define SPOTIFY_HAVE_ROM_MINIZ 1
+#else
+#define SPOTIFY_HAVE_ROM_MINIZ 0
+#endif
+#if __has_include(<esp_heap_caps.h>)
+#include <esp_heap_caps.h>
+#define SPOTIFY_HAVE_HEAP_CAPS 1
+#else
+#define SPOTIFY_HAVE_HEAP_CAPS 0
+#endif
 #include <mbedtls/bignum.h>
 #include <mbedtls/sha1.h>
 
@@ -53,7 +66,15 @@ constexpr uint32_t SPIRC_NOTIFY = 0x0Au;
 constexpr uint32_t SPIRC_LOAD = 0x14u;
 constexpr uint32_t SPIRC_PLAY = 0x15u;
 constexpr uint32_t SPIRC_PAUSE = 0x16u;
+constexpr uint32_t SPIRC_PLAY_PAUSE = 0x17u;
+constexpr uint32_t SPIRC_SEEK = 0x18u;
+constexpr uint32_t SPIRC_PREV = 0x19u;
+constexpr uint32_t SPIRC_NEXT = 0x1Au;
+constexpr uint32_t SPIRC_REPLACE = 0x21u;
 constexpr const char* SPIRC_PROTOCOL_VERSION = "2.7.1";
+constexpr size_t MAX_SPIRC_STATE_TRACK_REFS = 96u;
+constexpr size_t MAX_SPIRC_STATE_TRACK_REF_BYTES = 12288u;
+constexpr size_t MAX_CONTEXT_PLAYER_INFLATED_BYTES = 131072u;
 constexpr const char* TRACK_METADATA_PREFIX = "hm://metadata/3/track/";
 
 
@@ -547,6 +568,556 @@ String bytesToHex(const uint8_t* data, size_t size) {
   return out;
 }
 
+String spotifyTrackUriFromGid(const uint8_t* gid, size_t size) {
+  if (!gid || size != TRACK_GID_BYTES) return String();
+  static constexpr char kBase62[] = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  uint8_t value[TRACK_GID_BYTES];
+  memcpy(value, gid, sizeof(value));
+  char encoded[23];
+  encoded[22] = '\0';
+  for (int out = 21; out >= 0; --out) {
+    uint32_t remainder = 0u;
+    for (size_t i = 0u; i < sizeof(value); ++i) {
+      const uint32_t current = (remainder << 8u) | value[i];
+      value[i] = static_cast<uint8_t>(current / 62u);
+      remainder = current % 62u;
+    }
+    encoded[out] = kBase62[remainder];
+  }
+  return String(F("spotify:track:")) + encoded;
+}
+
+
+size_t findByteLiteral(const uint8_t* data, size_t size, const char* literal, size_t start = 0u) {
+  if (!data || !literal || start >= size) return size;
+  const size_t n = strlen(literal);
+  if (n == 0u || n > size) return size;
+  for (size_t i = start; i + n <= size; ++i) {
+    if (memcmp(data + i, literal, n) == 0) return i;
+  }
+  return size;
+}
+
+bool jsonWhitespace(uint8_t c) {
+  return c == ' ' || c == '\t' || c == '\r' || c == '\n';
+}
+
+bool findJsonKeyValueStart(const uint8_t* data, size_t size, const char* key,
+                           size_t& valueStart, size_t start = 0u,
+                           size_t end = SIZE_MAX, size_t* keyPosOut = nullptr) {
+  valueStart = size;
+  if (!data || !key || start >= size) return false;
+  if (end > size) end = size;
+  String marker = String('"') + key + '"';
+  size_t search = start;
+  while (search < end) {
+    const size_t pos = findByteLiteral(data, end, marker.c_str(), search);
+    if (pos >= end) return false;
+    size_t p = pos + marker.length();
+    while (p < end && jsonWhitespace(data[p])) ++p;
+    if (p < end && data[p] == ':') {
+      ++p;
+      while (p < end && jsonWhitespace(data[p])) ++p;
+      if (p < end) {
+        valueStart = p;
+        if (keyPosOut) *keyPosOut = pos;
+        return true;
+      }
+    }
+    search = pos + 1u;
+  }
+  return false;
+}
+
+bool parseJsonStringAt(const uint8_t* data, size_t end, size_t valueStart, String& out) {
+  out = String();
+  if (!data || valueStart >= end || data[valueStart] != '"') return false;
+  size_t p = valueStart + 1u;
+  out.reserve(48u);
+  bool escaped = false;
+  while (p < end) {
+    const char c = static_cast<char>(data[p++]);
+    if (escaped) {
+      // Spotify identifiers and URIs are ASCII. Preserve simple escapes; the
+      // selector never needs to materialize arbitrary user-facing JSON text.
+      out += c;
+      escaped = false;
+    } else if (c == '\\') {
+      escaped = true;
+    } else if (c == '"') {
+      return true;
+    } else {
+      if (out.length() >= 192u) return false;
+      out += c;
+    }
+  }
+  out = String();
+  return false;
+}
+
+bool jsonCompositeEnd(const uint8_t* data, size_t size, size_t start, size_t& endExclusive) {
+  endExclusive = size;
+  if (!data || start >= size || (data[start] != '{' && data[start] != '[')) return false;
+  uint32_t objectDepth = 0u;
+  uint32_t arrayDepth = 0u;
+  bool inString = false;
+  bool escaped = false;
+  for (size_t i = start; i < size; ++i) {
+    const uint8_t c = data[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (c == '\\') escaped = true;
+      else if (c == '"') inString = false;
+      continue;
+    }
+    if (c == '"') { inString = true; continue; }
+    if (c == '{') ++objectDepth;
+    else if (c == '}') {
+      if (objectDepth == 0u) return false;
+      --objectDepth;
+    } else if (c == '[') ++arrayDepth;
+    else if (c == ']') {
+      if (arrayDepth == 0u) return false;
+      --arrayDepth;
+    }
+    if (objectDepth == 0u && arrayDepth == 0u) {
+      endExclusive = i + 1u;
+      return true;
+    }
+  }
+  return false;
+}
+
+bool findEnclosingJsonObject(const uint8_t* data, size_t size, size_t target,
+                             size_t& objectStart, size_t& objectEnd) {
+  objectStart = objectEnd = size;
+  if (!data || target >= size) return false;
+  size_t stack[32];
+  size_t depth = 0u;
+  bool inString = false;
+  bool escaped = false;
+  for (size_t i = 0u; i <= target && i < size; ++i) {
+    const uint8_t c = data[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (c == '\\') escaped = true;
+      else if (c == '"') inString = false;
+      continue;
+    }
+    if (c == '"') { inString = true; continue; }
+    if (c == '{') {
+      if (depth >= (sizeof(stack) / sizeof(stack[0]))) return false;
+      stack[depth++] = i;
+    } else if (c == '}') {
+      if (depth == 0u) return false;
+      --depth;
+    }
+  }
+  if (depth == 0u) return false;
+  objectStart = stack[depth - 1u];
+  return jsonCompositeEnd(data, size, objectStart, objectEnd) && objectEnd > target;
+}
+
+bool extractJsonQuotedValue(const uint8_t* data, size_t size, const char* key,
+                            String& out, size_t start = 0u, size_t end = SIZE_MAX) {
+  out = String();
+  if (end > size) end = size;
+  size_t valueStart = size;
+  if (!findJsonKeyValueStart(data, size, key, valueStart, start, end)) return false;
+  return parseJsonStringAt(data, end, valueStart, out);
+}
+
+bool extractJsonUintValue(const uint8_t* data, size_t size, const char* key,
+                          uint32_t& out, size_t start = 0u, size_t end = SIZE_MAX) {
+  if (end > size) end = size;
+  size_t p = size;
+  if (!findJsonKeyValueStart(data, size, key, p, start, end)) return false;
+  bool quoted = p < end && data[p] == '"';
+  if (quoted) ++p;
+  uint64_t value = 0u;
+  bool any = false;
+  while (p < end && data[p] >= '0' && data[p] <= '9') {
+    any = true;
+    value = value * 10u + static_cast<uint64_t>(data[p++] - '0');
+    if (value > 0xffffffffu) return false;
+  }
+  if (quoted && (p >= end || data[p] != '"')) return false;
+  if (!any) return false;
+  out = static_cast<uint32_t>(value);
+  return true;
+}
+
+bool resolveContextPlayerUidToUri(const uint8_t* data, size_t size,
+                                  const String& uid, String& uri) {
+  uri = String();
+  if (!data || uid.length() == 0u) return false;
+
+  // The play command commonly identifies skip_to only by track_uid while the
+  // matching URI lives in context.pages[].tracks[]. Walk actual JSON `uid`
+  // members, find the enclosing track object, then resolve its sibling `uri`.
+  // This is whitespace/order tolerant and avoids guessing from neighbouring
+  // tracks or exposing the context body.
+  size_t search = 0u;
+  while (search < size) {
+    size_t valueStart = size;
+    size_t keyPos = size;
+    if (!findJsonKeyValueStart(data, size, "uid", valueStart, search, size, &keyPos)) return false;
+    String candidate;
+    if (parseJsonStringAt(data, size, valueStart, candidate) && candidate == uid) {
+      size_t objectStart = size;
+      size_t objectEnd = size;
+      if (findEnclosingJsonObject(data, size, keyPos, objectStart, objectEnd)) {
+        String candidateUri;
+        if (extractJsonQuotedValue(data, size, "uri", candidateUri, objectStart, objectEnd) &&
+            candidateUri.startsWith(F("spotify:track:"))) {
+          uri = candidateUri;
+          return true;
+        }
+      }
+    }
+    search = valueStart < size ? valueStart + 1u : keyPos + 1u;
+  }
+  return false;
+}
+
+
+struct ContextPlayerProtoSummary {
+  bool valid = false;
+  uint32_t fields = 0u;
+  uint32_t lengthFields = 0u;
+  String topMap;
+};
+
+uint32_t fnv1a32(const uint8_t* data, size_t size) {
+  uint32_t h = 2166136261u;
+  if (!data) return h;
+  for (size_t i = 0u; i < size; ++i) {
+    h ^= data[i];
+    h *= 16777619u;
+  }
+  return h;
+}
+
+bool bytesContain(const uint8_t* haystack, size_t haystackSize,
+                  const uint8_t* needle, size_t needleSize) {
+  if (!haystack || !needle || needleSize == 0u || needleSize > haystackSize) return false;
+  const size_t last = haystackSize - needleSize;
+  for (size_t i = 0u; i <= last; ++i) {
+    if (memcmp(haystack + i, needle, needleSize) == 0) return true;
+  }
+  return false;
+}
+
+String contextPlayerPrefixHex(const uint8_t* data, size_t size) {
+  static const char HEX_DIGITS[] = "0123456789abcdef";
+  String out;
+  const size_t n = std::min<size_t>(size, 16u);
+  out.reserve(n * 2u);
+  for (size_t i = 0u; i < n; ++i) {
+    out += HEX_DIGITS[(data[i] >> 4u) & 0x0fu];
+    out += HEX_DIGITS[data[i] & 0x0fu];
+  }
+  return out;
+}
+
+String contextPlayerMagic(const uint8_t* data, size_t size) {
+  if (!data || size == 0u) return F("none");
+  if (size >= 2u && data[0] == 0x1fu && data[1] == 0x8bu) return F("gzip");
+  if (size >= 4u && data[0] == 0x28u && data[1] == 0xb5u && data[2] == 0x2fu && data[3] == 0xfdu) return F("zstd");
+  if (size >= 2u && data[0] == 0x78u && (((static_cast<uint16_t>(data[0]) << 8u) | data[1]) % 31u) == 0u) return F("zlib");
+  size_t first = 0u;
+  while (first < size && (data[first] == ' ' || data[first] == '\t' || data[first] == '\r' || data[first] == '\n')) ++first;
+  if (first < size && (data[first] == '{' || data[first] == '[')) return F("json");
+  return F("none");
+}
+
+uint32_t contextPlayerPrintablePct(const uint8_t* data, size_t size) {
+  if (!data || size == 0u) return 0u;
+  size_t printable = 0u;
+  for (size_t i = 0u; i < size; ++i) {
+    const uint8_t c = data[i];
+    if ((c >= 0x20u && c <= 0x7eu) || c == '\r' || c == '\n' || c == '\t') ++printable;
+  }
+  return static_cast<uint32_t>((printable * 100u) / size);
+}
+
+struct ContextPlayerInflateResult {
+  uint8_t* data = nullptr;
+  size_t size = 0u;
+  bool attempted = false;
+  bool ok = false;
+  bool crcOk = false;
+  const char* status = "idle";
+};
+
+uint32_t readLe32(const uint8_t* p) {
+  return static_cast<uint32_t>(p[0]) |
+         (static_cast<uint32_t>(p[1]) << 8u) |
+         (static_cast<uint32_t>(p[2]) << 16u) |
+         (static_cast<uint32_t>(p[3]) << 24u);
+}
+
+void freeContextPlayerInflate(ContextPlayerInflateResult& result) {
+  if (!result.data) return;
+#if SPOTIFY_HAVE_HEAP_CAPS
+  heap_caps_free(result.data);
+#else
+  free(result.data);
+#endif
+  result.data = nullptr;
+  result.size = 0u;
+}
+
+ContextPlayerInflateResult inflateContextPlayerGzip(const uint8_t* data, size_t size) {
+  ContextPlayerInflateResult result;
+  if (!data || size < 18u || data[0] != 0x1fu || data[1] != 0x8bu) return result;
+  result.attempted = true;
+#if !SPOTIFY_HAVE_ROM_MINIZ
+  result.status = "miniz-unavailable";
+  return result;
+#else
+  if (data[2] != 8u || (data[3] & 0xe0u) != 0u) {
+    result.status = "bad-header";
+    return result;
+  }
+
+  const uint8_t flags = data[3];
+  size_t offset = 10u;
+  const size_t trailerOffset = size - 8u;
+  if ((flags & 0x04u) != 0u) {
+    if (offset + 2u > trailerOffset) { result.status = "bad-extra"; return result; }
+    const size_t extra = static_cast<size_t>(data[offset]) | (static_cast<size_t>(data[offset + 1u]) << 8u);
+    offset += 2u;
+    if (extra > trailerOffset - offset) { result.status = "bad-extra"; return result; }
+    offset += extra;
+  }
+  auto skipZeroTerminated = [&](const char* status) -> bool {
+    while (offset < trailerOffset && data[offset] != 0u) ++offset;
+    if (offset >= trailerOffset) { result.status = status; return false; }
+    ++offset;
+    return true;
+  };
+  if ((flags & 0x08u) != 0u && !skipZeroTerminated("bad-name")) return result;
+  if ((flags & 0x10u) != 0u && !skipZeroTerminated("bad-comment")) return result;
+  if ((flags & 0x02u) != 0u) {
+    if (offset + 2u > trailerOffset) { result.status = "bad-hcrc"; return result; }
+    offset += 2u;
+  }
+  if (offset >= trailerOffset) { result.status = "empty-deflate"; return result; }
+
+  const uint32_t expectedCrc = readLe32(data + trailerOffset);
+  const uint32_t expectedSize = readLe32(data + trailerOffset + 4u);
+  if (expectedSize == 0u || expectedSize > MAX_CONTEXT_PLAYER_INFLATED_BYTES) {
+    result.status = "size-bound";
+    return result;
+  }
+
+#if SPOTIFY_HAVE_HEAP_CAPS
+  result.data = static_cast<uint8_t*>(heap_caps_malloc(expectedSize, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+  if (!result.data && expectedSize <= 32768u) {
+    result.data = static_cast<uint8_t*>(heap_caps_malloc(expectedSize, MALLOC_CAP_8BIT));
+  }
+#else
+  if (expectedSize <= 32768u) result.data = static_cast<uint8_t*>(malloc(expectedSize));
+#endif
+  if (!result.data) { result.status = "alloc-failed"; return result; }
+
+  // Do not use tinfl_decompress_mem_to_mem() here. Espressif's miniz helper
+  // creates a tinfl_decompressor as a local variable (~11 KiB on this miniz
+  // layout), which can overflow the already-active Spotify AP task stack.
+  // Keep the decompressor state on the heap and call the ROM low-level API
+  // directly; the large decompressed body remains in PSRAM when available.
+  tinfl_decompressor* decomp = nullptr;
+#if SPOTIFY_HAVE_HEAP_CAPS
+  decomp = static_cast<tinfl_decompressor*>(
+      heap_caps_malloc(sizeof(tinfl_decompressor), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+  if (!decomp) {
+    decomp = static_cast<tinfl_decompressor*>(
+        heap_caps_malloc(sizeof(tinfl_decompressor), MALLOC_CAP_8BIT));
+  }
+#else
+  decomp = static_cast<tinfl_decompressor*>(malloc(sizeof(tinfl_decompressor)));
+#endif
+  if (!decomp) {
+    result.status = "state-alloc-failed";
+    freeContextPlayerInflate(result);
+    return result;
+  }
+
+  tinfl_init(decomp);
+  size_t inputBytes = trailerOffset - offset;
+  size_t outputBytes = expectedSize;
+  const tinfl_status inflateStatus = tinfl_decompress(
+      decomp, data + offset, &inputBytes, result.data, result.data, &outputBytes,
+      TINFL_FLAG_USING_NON_WRAPPING_OUTPUT_BUF);
+#if SPOTIFY_HAVE_HEAP_CAPS
+  heap_caps_free(decomp);
+#else
+  free(decomp);
+#endif
+
+  if (inflateStatus != TINFL_STATUS_DONE || outputBytes != expectedSize) {
+    result.status = "inflate-failed";
+    freeContextPlayerInflate(result);
+    return result;
+  }
+
+  result.size = outputBytes;
+  const uint32_t actualCrc = static_cast<uint32_t>(mz_crc32(MZ_CRC32_INIT, result.data, result.size));
+  result.crcOk = actualCrc == expectedCrc;
+  if (!result.crcOk) {
+    result.status = "crc-mismatch";
+    freeContextPlayerInflate(result);
+    return result;
+  }
+  result.ok = true;
+  result.status = "ok";
+  return result;
+#endif
+}
+
+ContextPlayerProtoSummary summarizeContextPlayerProto(const uint8_t* data, size_t size) {
+  ContextPlayerProtoSummary out;
+  if (!data || size == 0u) return out;
+  size_t offset = 0u;
+  String map;
+  map.reserve(72u);
+  uint32_t mapped = 0u;
+  while (offset < size && out.fields < 256u) {
+    uint64_t key = 0u;
+    if (!readVarint(data, size, offset, key)) return out;
+    const uint32_t field = static_cast<uint32_t>(key >> 3u);
+    const uint8_t wire = static_cast<uint8_t>(key & 7u);
+    if (field == 0u || (wire != 0u && wire != 1u && wire != 2u && wire != 5u)) return out;
+    ++out.fields;
+    if (mapped < 10u) {
+      if (map.length() != 0u) map += ',';
+      map += String(field);
+      map += ':';
+      map += String(wire);
+      ++mapped;
+    }
+    if (wire == 0u) {
+      uint64_t ignored = 0u;
+      if (!readVarint(data, size, offset, ignored)) return out;
+    } else if (wire == 1u) {
+      if (size - offset < 8u) return out;
+      offset += 8u;
+    } else if (wire == 2u) {
+      uint64_t len64 = 0u;
+      if (!readVarint(data, size, offset, len64) || len64 > size - offset) return out;
+      ++out.lengthFields;
+      offset += static_cast<size_t>(len64);
+    } else if (wire == 5u) {
+      if (size - offset < 4u) return out;
+      offset += 4u;
+    }
+  }
+  if (offset != size || out.fields == 0u) return out;
+  out.valid = true;
+  out.topMap = map;
+  return out;
+}
+
+bool parseModernContextPlayerState(const uint8_t* data, size_t size, String& targetUid,
+                                   String& targetUri, uint32_t& targetIndex,
+                                   bool& hasTargetIndex) {
+  targetUid = String();
+  targetUri = String();
+  targetIndex = 0u;
+  hasTargetIndex = false;
+  if (!data || size == 0u) return false;
+
+  bool sawKnownField = false;
+
+  // spotify.player.esperanto.proto.ContextPlayerState.index = field 6.
+  // ContextIndex.track = field 2. Prefer the track URI below for matching because
+  // this index can be page-relative on large contexts.
+  std::vector<uint8_t> indexMessage;
+  if (extractLengthDelimited(data, size, 6u, indexMessage)) {
+    uint64_t track = 0u;
+    if (extractProtoVarint(indexMessage.data(), indexMessage.size(), 2u, track) &&
+        track <= 0xffffffffu) {
+      targetIndex = static_cast<uint32_t>(track);
+      hasTargetIndex = true;
+      sawKnownField = true;
+    }
+  }
+
+  // ContextPlayerState.track = ProvidedTrack field 7; ProvidedTrack.context_track
+  // = field 1; ContextTrack.uri/uid = fields 1/2. This is the current binary
+  // encoding seen from Android, not the historical JSON command payload.
+  std::vector<uint8_t> providedTrack;
+  std::vector<uint8_t> contextTrack;
+  if (extractLengthDelimited(data, size, 7u, providedTrack) &&
+      extractLengthDelimited(providedTrack.data(), providedTrack.size(), 1u, contextTrack)) {
+    String uri;
+    if (extractProtoString(contextTrack.data(), contextTrack.size(), 1u, uri) &&
+        uri.startsWith(F("spotify:track:"))) {
+      targetUri = uri;
+      sawKnownField = true;
+    }
+    String uid;
+    if (extractProtoString(contextTrack.data(), contextTrack.size(), 2u, uid)) {
+      targetUid = uid;
+      sawKnownField = true;
+    }
+  }
+
+  return sawKnownField;
+}
+
+void parseContextPlayerState(const uint8_t* data, size_t size, String& encoding,
+                             String& endpoint, String& targetUid, String& targetUri,
+                             uint32_t& targetIndex, bool& hasTargetIndex,
+                             bool& resolvedUidToUri) {
+  encoding = String();
+  endpoint = String();
+  targetUid = String();
+  targetUri = String();
+  targetIndex = 0u;
+  hasTargetIndex = false;
+  resolvedUidToUri = false;
+  if (!data || size == 0u) return;
+
+  size_t first = 0u;
+  while (first < size && (data[first] == ' ' || data[first] == '\t' ||
+                          data[first] == '\r' || data[first] == '\n')) ++first;
+
+  if (first < size && data[first] == '{') {
+    encoding = F("json");
+    extractJsonQuotedValue(data, size, "endpoint", endpoint);
+
+    size_t skipValue = size;
+    size_t skipEnd = size;
+    if (findJsonKeyValueStart(data, size, "skip_to", skipValue)) {
+      if (skipValue < size && (data[skipValue] == '{' || data[skipValue] == '[')) {
+        if (!jsonCompositeEnd(data, size, skipValue, skipEnd)) skipEnd = size;
+      } else {
+        skipEnd = std::min(size, skipValue + 2048u);
+      }
+      if (!extractJsonQuotedValue(data, size, "track_uri", targetUri, skipValue, skipEnd)) {
+        extractJsonQuotedValue(data, size, "uri", targetUri, skipValue, skipEnd);
+        if (!targetUri.startsWith(F("spotify:track:"))) targetUri = String();
+      }
+      extractJsonQuotedValue(data, size, "track_uid", targetUid, skipValue, skipEnd);
+      hasTargetIndex = extractJsonUintValue(data, size, "track_index", targetIndex, skipValue, skipEnd);
+    }
+    if (targetUri.length() == 0u && targetUid.length() != 0u) {
+      resolvedUidToUri = resolveContextPlayerUidToUri(data, size, targetUid, targetUri);
+    }
+    return;
+  }
+
+  if (parseModernContextPlayerState(data, size, targetUid, targetUri,
+                                    targetIndex, hasTargetIndex)) {
+    encoding = F("proto");
+    return;
+  }
+
+  encoding = F("binary");
+}
+
 std::vector<uint8_t> buildAudioKeyRequest(const uint8_t fileId[AUDIO_FILE_ID_BYTES],
                                           const uint8_t trackGid[TRACK_GID_BYTES],
                                           uint32_t sequence) {
@@ -749,7 +1320,11 @@ std::vector<uint8_t> buildSpircDeviceState(const char* deviceName, uint16_t volu
   addIntCapability(4u, 4);   // kDeviceType: speaker/computer-compatible value used by cspot
   addIntCapability(5u, 1);   // kGaiaEqConnectId
   addIntCapability(6u, 0);   // kSupportsLogout
-  addIntCapability(13u, 1);  // kSupportsPlaylistV2
+  // kSupportsPlaylistV2 (type 13) is intentionally NOT advertised. This build
+  // implements classic SPIRC State.track/commands but not the full playlist-v2 /
+  // connect-state command contract. Advertising it made current Android choose a
+  // control path this receiver could not honor for direct list selection.
+  addIntCapability(10u, 1);  // kCommandAcks: Notify echoes recipient command ident/seq
   addIntCapability(7u, 1);   // kIsObservable
   addIntCapability(8u, 64);  // kVolumeSteps
   appendMessageField(out, 17u, buildSpircCapability(1u, -1, {
@@ -789,6 +1364,12 @@ std::vector<uint8_t> buildSpircFrame(uint32_t type, uint32_t sequence,
 
 struct SpircFrameInfo {
   uint32_t type = 0u;
+  uint32_t seqNr = 0u;
+  bool hasSeqNr = false;
+  std::vector<String> recipients;
+  String lastCommandIdent;
+  uint32_t lastCommandMsgid = 0u;
+  bool hasLastCommandAck = false;
   String ident;
   String name;
   bool active = false;
@@ -802,12 +1383,39 @@ struct SpircFrameInfo {
   bool hasPositionMs = false;
   uint32_t playStatus = 0u;
   bool hasPlayStatus = false;
+  uint32_t stateIndex = 0u;
+  bool hasStateIndex = false;
   uint32_t playingTrackIndex = 0u;
   bool hasPlayingTrackIndex = false;
   uint32_t trackCount = 0u;
   uint32_t selectedTrackIndex = 0u;
   std::vector<uint8_t> selectedTrackGid;
   String selectedTrackUri;
+  std::vector<std::vector<uint8_t>> trackRefs;
+  size_t trackRefBytes = 0u;
+  uint32_t trackRefsTruncated = 0u;
+  bool shuffle = false;
+  bool hasShuffle = false;
+  bool repeat = false;
+  bool hasRepeat = false;
+  bool hasContextPlayerState = false;
+  size_t contextPlayerStateBytes = 0u;
+  String contextPlayerEncoding;
+  String contextPlayerEndpoint;
+  String contextPlayerTargetUid;
+  String contextPlayerTargetUri;
+  uint32_t contextPlayerTargetIndex = 0u;
+  bool hasContextPlayerTargetIndex = false;
+  bool contextPlayerUidResolved = false;
+  std::vector<uint8_t> contextPlayerState;
+  uint32_t contextPlayerHash = 0u;
+  String contextPlayerPrefix;
+  String contextPlayerMagic;
+  uint32_t contextPlayerPrintablePct = 0u;
+  bool contextPlayerProtoValid = false;
+  uint32_t contextPlayerProtoFields = 0u;
+  uint32_t contextPlayerProtoLengthFields = 0u;
+  String contextPlayerProtoMap;
 };
 
 bool parseSpircFrame(const std::vector<uint8_t>& data, SpircFrameInfo& info) {
@@ -815,6 +1423,74 @@ bool parseSpircFrame(const std::vector<uint8_t>& data, SpircFrameInfo& info) {
   if (!extractProtoVarint(data.data(), data.size(), 5u, type)) return false;
   info.type = static_cast<uint32_t>(type);
   extractProtoString(data.data(), data.size(), 2u, info.ident);
+  uint64_t seqNr = 0u;
+  if (extractProtoVarint(data.data(), data.size(), 4u, seqNr)) {
+    info.seqNr = static_cast<uint32_t>(seqNr);
+    info.hasSeqNr = true;
+  }
+
+  // Frame.recipient is repeated string field 18. Keep a small bounded set
+  // so commands for other Connect devices are ignored and targeted commands
+  // can be acknowledged through State.last_command_* (fields 20/21).
+  size_t frameOffset = 0u;
+  while (frameOffset < data.size()) {
+    uint64_t frameKey = 0u;
+    if (!readVarint(data.data(), data.size(), frameOffset, frameKey)) break;
+    const uint32_t frameField = static_cast<uint32_t>(frameKey >> 3u);
+    const uint8_t frameWire = static_cast<uint8_t>(frameKey & 7u);
+    if (frameWire == 0u) {
+      uint64_t ignored = 0u;
+      if (!readVarint(data.data(), data.size(), frameOffset, ignored)) break;
+    } else if (frameWire == 1u) {
+      if (data.size() - frameOffset < 8u) break;
+      frameOffset += 8u;
+    } else if (frameWire == 2u) {
+      uint64_t len64 = 0u;
+      if (!readVarint(data.data(), data.size(), frameOffset, len64) || len64 > data.size() - frameOffset) break;
+      const size_t len = static_cast<size_t>(len64);
+      if (frameField == 18u && info.recipients.size() < 4u) {
+        String recipient;
+        recipient.reserve(static_cast<unsigned int>(len));
+        for (size_t i = 0u; i < len; ++i) recipient += static_cast<char>(data[frameOffset + i]);
+        info.recipients.push_back(recipient);
+      } else if (frameField == 19u) {
+        info.hasContextPlayerState = true;
+        info.contextPlayerStateBytes = len;
+        const uint8_t* cps = data.data() + frameOffset;
+        // Keep only this bounded frame-local copy. It is discarded after the
+        // SPIRC event is handled and is never surfaced in diagnostics. The copy
+        // lets the resolver compare opaque current-Android payloads against the
+        // already-retained classic TrackRef queue without guessing a schema.
+        if (len <= MAX_SPIRC_STATE_TRACK_REF_BYTES) {
+          info.contextPlayerState.assign(cps, cps + len);
+        }
+        info.contextPlayerHash = fnv1a32(cps, len);
+        info.contextPlayerPrefix = contextPlayerPrefixHex(cps, len);
+        info.contextPlayerMagic = contextPlayerMagic(cps, len);
+        info.contextPlayerPrintablePct = contextPlayerPrintablePct(cps, len);
+        const ContextPlayerProtoSummary summary = summarizeContextPlayerProto(cps, len);
+        info.contextPlayerProtoValid = summary.valid;
+        info.contextPlayerProtoFields = summary.fields;
+        info.contextPlayerProtoLengthFields = summary.lengthFields;
+        info.contextPlayerProtoMap = summary.topMap;
+        parseContextPlayerState(cps, len,
+                                info.contextPlayerEncoding, info.contextPlayerEndpoint, info.contextPlayerTargetUid,
+                                info.contextPlayerTargetUri, info.contextPlayerTargetIndex,
+                                info.hasContextPlayerTargetIndex, info.contextPlayerUidResolved);
+      }
+      frameOffset += len;
+    } else if (frameWire == 5u) {
+      if (data.size() - frameOffset < 4u) break;
+      frameOffset += 4u;
+    } else {
+      break;
+    }
+  }
+  if (!info.recipients.empty() && info.ident.length() != 0u && info.hasSeqNr) {
+    info.lastCommandIdent = info.ident;
+    info.lastCommandMsgid = info.seqNr;
+    info.hasLastCommandAck = true;
+  }
 
   std::vector<uint8_t> deviceState;
   if (extractLengthDelimited(data.data(), data.size(), 7u, deviceState)) {
@@ -849,12 +1525,25 @@ bool parseSpircFrame(const std::vector<uint8_t>& data, SpircFrameInfo& info) {
       info.playStatus = static_cast<uint32_t>(value);
       info.hasPlayStatus = true;
     }
+    if (extractProtoVarint(state.data(), state.size(), 3u, value)) {
+      info.stateIndex = static_cast<uint32_t>(value);
+      info.hasStateIndex = true;
+    }
     if (extractProtoVarint(state.data(), state.size(), 26u, value)) {
       info.playingTrackIndex = static_cast<uint32_t>(value);
       info.hasPlayingTrackIndex = true;
     }
+    if (extractProtoVarint(state.data(), state.size(), 13u, value)) {
+      info.shuffle = value != 0u;
+      info.hasShuffle = true;
+    }
+    if (extractProtoVarint(state.data(), state.size(), 14u, value)) {
+      info.repeat = value != 0u;
+      info.hasRepeat = true;
+    }
 
-    const uint32_t wantedTrack = info.hasPlayingTrackIndex ? info.playingTrackIndex : 0u;
+    const uint32_t wantedTrack = info.hasPlayingTrackIndex ? info.playingTrackIndex :
+                                 (info.hasStateIndex ? info.stateIndex : 0u);
     std::vector<uint8_t> firstTrackGid;
     String firstTrackUri;
     size_t offset = 0u;
@@ -878,6 +1567,13 @@ bool parseSpircFrame(const std::vector<uint8_t>& data, SpircFrameInfo& info) {
           String uri;
           extractLengthDelimited(state.data() + offset, len, 1u, gid);
           extractProtoString(state.data() + offset, len, 2u, uri);
+          if (info.trackRefs.size() < MAX_SPIRC_STATE_TRACK_REFS &&
+              info.trackRefBytes + len <= MAX_SPIRC_STATE_TRACK_REF_BYTES) {
+            info.trackRefs.emplace_back(state.begin() + offset, state.begin() + offset + len);
+            info.trackRefBytes += len;
+          } else {
+            ++info.trackRefsTruncated;
+          }
           if (info.trackCount == 0u) { firstTrackGid = gid; firstTrackUri = uri; }
           if (info.trackCount == wantedTrack) {
             info.selectedTrackIndex = info.trackCount;
@@ -903,24 +1599,98 @@ bool parseSpircFrame(const std::vector<uint8_t>& data, SpircFrameInfo& info) {
   return true;
 }
 
+bool decodeSpircTrackRef(const std::vector<uint8_t>& trackRef,
+                         std::vector<uint8_t>& gid, String& uri, String& context) {
+  gid.clear();
+  uri = String();
+  context = String();
+  extractLengthDelimited(trackRef.data(), trackRef.size(), 1u, gid);
+  extractProtoString(trackRef.data(), trackRef.size(), 2u, uri);
+  extractProtoString(trackRef.data(), trackRef.size(), 4u, context);
+  return gid.size() == TRACK_GID_BYTES || uri.length() != 0u;
+}
+
+// r12: the retained classic queue seen on hardware may carry only TrackRef field 1
+// (16-byte GID). Modern context-player JSON resolves track_uid to a Spotify URI,
+// so compare both representations in one canonical identity domain. Prefer a
+// native spotify:track URI when present; otherwise derive it deterministically
+// from the GID. No identifier is exported by this helper.
+String canonicalSpircTrackUri(const std::vector<uint8_t>& trackRef,
+                              bool* hadNativeUri = nullptr, bool* hadGid = nullptr) {
+  std::vector<uint8_t> gid;
+  String uri;
+  String context;
+  if (!decodeSpircTrackRef(trackRef, gid, uri, context)) {
+    if (hadNativeUri) *hadNativeUri = false;
+    if (hadGid) *hadGid = false;
+    return String();
+  }
+  const bool nativeUri = uri.startsWith(F("spotify:track:"));
+  const bool validGid = gid.size() == TRACK_GID_BYTES;
+  if (hadNativeUri) *hadNativeUri = nativeUri;
+  if (hadGid) *hadGid = validGid;
+  if (nativeUri) return uri;
+  if (validGid) return spotifyTrackUriFromGid(gid.data(), gid.size());
+  return String();
+}
+
+std::vector<uint8_t> buildSpircTrackRefMessage(const SpircFrameInfo& remote, const String& resolvedTrackUri) {
+  std::vector<uint8_t> trackRef;
+  if (remote.selectedTrackGid.size() == TRACK_GID_BYTES) {
+    appendBytesField(trackRef, 1u, remote.selectedTrackGid.data(), remote.selectedTrackGid.size());
+  }
+  if (resolvedTrackUri.length() != 0u) appendStringField(trackRef, 2u, resolvedTrackUri);
+  if (remote.contextUri.length() != 0u) appendStringField(trackRef, 4u, remote.contextUri);
+  return trackRef;
+}
+
 std::vector<uint8_t> buildSpircTransferNotify(uint32_t sequence,
                                               const char* deviceId,
                                               const char* deviceName,
                                               uint16_t volume,
                                               uint64_t syncedTimestampMs,
-                                              const SpircFrameInfo& remote) {
+                                              const SpircFrameInfo& remote,
+                                              uint32_t forcedPlayStatus = 0xffffffffu,
+                                              uint32_t durationMs = 0u) {
+  (void)durationMs; // SPIRC State v2.7.1 has no duration field; keep call shape stable.
   std::vector<uint8_t> state;
+  String trackUri = remote.selectedTrackUri;
+  if (trackUri.length() == 0u && remote.selectedTrackGid.size() == TRACK_GID_BYTES) {
+    trackUri = spotifyTrackUriFromGid(remote.selectedTrackGid.data(), remote.selectedTrackGid.size());
+  }
   if (remote.contextUri.length() != 0u) appendStringField(state, 2u, remote.contextUri);
+
+  uint32_t playingIndex = remote.hasPlayingTrackIndex ? remote.playingTrackIndex : remote.selectedTrackIndex;
+  size_t emittedTrackRefs = 0u;
+  if (!remote.trackRefs.empty()) {
+    for (const auto& trackRef : remote.trackRefs) {
+      appendMessageField(state, 27u, trackRef);
+      ++emittedTrackRefs;
+    }
+  } else if (remote.selectedTrackGid.size() == TRACK_GID_BYTES || trackUri.length() != 0u) {
+    const std::vector<uint8_t> trackRef = buildSpircTrackRefMessage(remote, trackUri);
+    appendMessageField(state, 27u, trackRef);
+    emittedTrackRefs = 1u;
+    playingIndex = 0u;
+  }
+  if (emittedTrackRefs != 0u && playingIndex >= emittedTrackRefs) playingIndex = 0u;
+
+  appendVarintField(state, 3u, playingIndex);
   const uint32_t position = remote.hasPosition ? remote.position :
                             (remote.hasPositionMs ? remote.positionMs : 0u);
   appendVarintField(state, 4u, position);
-  // cspot marks the receiver active and Playing immediately when accepting a Load,
-  // then sends Notify before track acquisition. Mirror that activation contract.
-  appendVarintField(state, 5u, 1u);
+  const uint32_t playStatus = forcedPlayStatus != 0xffffffffu
+                                  ? forcedPlayStatus
+                                  : (remote.hasPlayStatus ? remote.playStatus : 1u);
+  appendVarintField(state, 5u, playStatus);
   appendVarintField(state, 7u, syncedTimestampMs);
-  appendVarintField(state, 13u, 0u);
-  appendVarintField(state, 14u, 0u);
-  if (remote.hasPlayingTrackIndex) appendVarintField(state, 26u, remote.playingTrackIndex);
+  appendVarintField(state, 13u, remote.hasShuffle && remote.shuffle ? 1u : 0u);
+  appendVarintField(state, 14u, remote.hasRepeat && remote.repeat ? 1u : 0u);
+  if (remote.hasLastCommandAck && remote.lastCommandIdent.length() != 0u) {
+    appendStringField(state, 20u, remote.lastCommandIdent);
+    appendVarintField(state, 21u, remote.lastCommandMsgid);
+  }
+  if (emittedTrackRefs != 0u) appendVarintField(state, 26u, playingIndex);
 
   std::vector<uint8_t> out;
   appendVarintField(out, 1u, 1u);
@@ -1331,9 +2101,68 @@ bool SpotifySessionProbe::startNow(const String& userName, uint8_t authType,
   sessionConnectedMs_ = 0u;
   spircHelloMercurySequence_ = ~static_cast<uint64_t>(0);
   spircTransferNotifyMercurySequence_ = ~static_cast<uint64_t>(0);
+  spircBlockedNotifyMercurySequence_ = ~static_cast<uint64_t>(0);
+  spircControlNotifyMercurySequence_ = ~static_cast<uint64_t>(0);
+  memset(spircLastCommandIdent_, 0, sizeof(spircLastCommandIdent_));
+  spircLastCommandMsgid_ = 0u;
+  spircHaveCommandAck_ = false;
+  spircPlaySelectFrames_ = 0u;
+  spircPlaySelectByIndex_ = 0u;
+  spircReplaceFrames_ = 0u;
+  spircContextPlayerFrames_ = 0u;
+  spircContextPlayerBytes_ = 0u;
+  spircContextPlayerPlay_ = 0u;
+  spircContextPlayerSelect_ = 0u;
+  spircContextPlayerByUid_ = 0u;
+  spircContextPlayerByUri_ = 0u;
+  spircContextPlayerByIndex_ = 0u;
+  spircContextPlayerByScan_ = 0u;
+  spircContextPlayerByInflate_ = 0u;
+  spircContextPlayerBySkipScan_ = 0u;
+  spircContextPlayerUnresolved_ = 0u;
+  spircContextInflateAttempts_ = 0u;
+  spircContextInflateOk_ = 0u;
+  spircContextInflateFailures_ = 0u;
+  spircContextInflateBytes_ = 0u;
+  spircContextInflatePrintablePct_ = 0u;
+  spircContextSkipObjects_ = 0u;
+  spircContextSkipUidCandidates_ = 0u;
+  spircContextSkipUriCandidates_ = 0u;
+  spircContextSkipIndexCandidates_ = 0u;
+  spircContextSkipUidResolved_ = 0u;
+  spircContextSkipQueueResolved_ = 0u;
+  spircContextSkipAmbiguous_ = 0u;
+  spircContextSkipUniqueIndex_ = -1;
+  spircContextResolveLastUs_ = 0u;
+  spircContextResolveMaxUs_ = 0u;
+  spircSelectionApplyLastUs_ = 0u;
+  spircSelectionApplyMaxUs_ = 0u;
+  spircContextPlayerLastBytes_ = 0u;
+  spircContextPlayerLastHash_ = 0u;
+  spircContextPlayerPrintablePct_ = 0u;
+  spircContextPlayerProtoValid_ = false;
+  spircContextPlayerProtoFields_ = 0u;
+  spircContextPlayerProtoLengthFields_ = 0u;
+  spircContextPlayerQueueMatches_ = 0u;
+  spircContextPlayerNonCurrentMatches_ = 0u;
+  spircContextPlayerUniqueIndex_ = -1;
+  spircDuplicateLoadsWithUnknownContext_ = 0u;
+  spircContextPlayerEndpoint_[0] = '\0';
+  spircContextPlayerEncoding_[0] = '\0';
+  spircContextPlayerPrefix_[0] = '\0';
+  spircContextPlayerMagic_[0] = '\0';
+  spircContextPlayerProtoMap_[0] = '\0';
+  spircContextInflateStatus_[0] = '\0';
+  spircContextInflateEncoding_[0] = '\0';
+  spircPlaybackClockRunning_ = false;
+  spircPlaybackClockBasePositionMs_ = 0u;
+  spircPlaybackClockStartedAtMs_ = 0u;
   metadataMercurySequence_ = ~static_cast<uint64_t>(0);
   metadataLastStatus_ = 0;
   metadataLastBytes_ = 0u;
+  metadataRequestedAtMs_ = 0u;
+  metadataLastRoundTripMs_ = 0u;
+  metadataMaxRoundTripMs_ = 0u;
   audioKeyPending_ = false;
   audioKeyPendingSequence_ = 0u;
   audioKeyRequestedAtMs_ = 0u;
@@ -1362,6 +2191,19 @@ bool SpotifySessionProbe::startNow(const String& userName, uint8_t authType,
   audioKeyProtocolErrors_ = 0u;
   audioKeyStaleResponses_ = 0u;
   audioKeyTrackChangeCancels_ = 0u;
+  mediaKeyServiceBlocked_ = false;
+  mediaKeyBlockEvents_ = 0u;
+  mediaKeySuppressedTracks_ = 0u;
+  mediaKeyBlockError0_ = 0u;
+  mediaKeyBlockError1_ = 0u;
+  spircStateTrackRefs_.clear();
+  spircStateTrackRefBytes_ = 0u;
+  spircStateTrackRefsTruncated_ = 0u;
+  spircStateFallbackTrackRefs_ = 0u;
+  spircStateShuffle_ = false;
+  spircStateHasShuffle_ = false;
+  spircStateRepeat_ = false;
+  spircStateHasRepeat_ = false;
   memset(audioKey_, 0, sizeof(audioKey_));
   productInfoBytes_ = 0u;
   productInfoHash_ = 0u;
@@ -1380,6 +2222,9 @@ bool SpotifySessionProbe::startNow(const String& userName, uint8_t authType,
   mediaHeadFetchedForTrack_ = false;
   setMediaHeadError("none");
   apStreamChannelId_ = 0u;
+  apStreamLastCompletedChannelId_ = 0xffffu;
+  apStreamProbeIndex_ = 0u;
+  apStreamCompletedProbes_ = 0u;
   apStreamRequestedAtMs_ = 0u;
   apStreamRequestBytes_ = 0u;
   apStreamResponsePackets_ = 0u;
@@ -1390,6 +2235,7 @@ bool SpotifySessionProbe::startNow(const String& userName, uint8_t authType,
   apStreamReportedFileBytes_ = 0u;
   apStreamDataPackets_ = 0u;
   apStreamDataBytes_ = 0u;
+  apStreamCurrentDataBytes_ = 0u;
   apStreamCandidateFormat_ = -1;
   apStreamHeadersComplete_ = false;
   apStreamPending_ = false;
@@ -1488,6 +2334,58 @@ void SpotifySessionProbe::reset() {
   spircLoadFrames_ = 0u;
   spircPlayFrames_ = 0u;
   spircPauseFrames_ = 0u;
+  spircPlayPauseFrames_ = 0u;
+  spircSeekFrames_ = 0u;
+  spircPrevFrames_ = 0u;
+  spircNextFrames_ = 0u;
+  spircPlaySelectFrames_ = 0u;
+  spircPlaySelectByIndex_ = 0u;
+  spircReplaceFrames_ = 0u;
+  spircContextPlayerFrames_ = 0u;
+  spircContextPlayerBytes_ = 0u;
+  spircContextPlayerPlay_ = 0u;
+  spircContextPlayerSelect_ = 0u;
+  spircContextPlayerByUid_ = 0u;
+  spircContextPlayerByUri_ = 0u;
+  spircContextPlayerByIndex_ = 0u;
+  spircContextPlayerByScan_ = 0u;
+  spircContextPlayerByInflate_ = 0u;
+  spircContextPlayerBySkipScan_ = 0u;
+  spircContextPlayerUnresolved_ = 0u;
+  spircContextInflateAttempts_ = 0u;
+  spircContextInflateOk_ = 0u;
+  spircContextInflateFailures_ = 0u;
+  spircContextInflateBytes_ = 0u;
+  spircContextInflatePrintablePct_ = 0u;
+  spircContextSkipObjects_ = 0u;
+  spircContextSkipUidCandidates_ = 0u;
+  spircContextSkipUriCandidates_ = 0u;
+  spircContextSkipIndexCandidates_ = 0u;
+  spircContextSkipUidResolved_ = 0u;
+  spircContextSkipQueueResolved_ = 0u;
+  spircContextSkipAmbiguous_ = 0u;
+  spircContextSkipUniqueIndex_ = -1;
+  spircContextResolveLastUs_ = 0u;
+  spircContextResolveMaxUs_ = 0u;
+  spircSelectionApplyLastUs_ = 0u;
+  spircSelectionApplyMaxUs_ = 0u;
+  spircContextPlayerLastBytes_ = 0u;
+  spircContextPlayerLastHash_ = 0u;
+  spircContextPlayerPrintablePct_ = 0u;
+  spircContextPlayerProtoValid_ = false;
+  spircContextPlayerProtoFields_ = 0u;
+  spircContextPlayerProtoLengthFields_ = 0u;
+  spircContextPlayerQueueMatches_ = 0u;
+  spircContextPlayerNonCurrentMatches_ = 0u;
+  spircContextPlayerUniqueIndex_ = -1;
+  spircDuplicateLoadsWithUnknownContext_ = 0u;
+  spircContextPlayerEndpoint_[0] = '\0';
+  spircContextPlayerEncoding_[0] = '\0';
+  spircContextPlayerPrefix_[0] = '\0';
+  spircContextPlayerMagic_[0] = '\0';
+  spircContextPlayerProtoMap_[0] = '\0';
+  spircContextInflateStatus_[0] = '\0';
+  spircContextInflateEncoding_[0] = '\0';
   spircLastType_ = 0u;
   spircRemoteActive_ = false;
   spircLocalActive_ = false;
@@ -1496,9 +2394,37 @@ void SpotifySessionProbe::reset() {
   spircTransferNotifySent_ = 0u;
   spircTransferNotifyAcks_ = 0u;
   spircTransferNotifyBytes_ = 0u;
+  spircBlockedNotifyMercurySequence_ = ~static_cast<uint64_t>(0);
+  spircBlockedNotifyAttempts_ = 0u;
+  spircBlockedNotifySent_ = 0u;
+  spircBlockedNotifyAcks_ = 0u;
+  spircBlockedNotifyBytes_ = 0u;
+  spircEmptyLoadsIgnored_ = 0u;
+  spircDuplicateLoadsIgnored_ = 0u;
+  spircDuplicateLoadsAcked_ = 0u;
+  spircRecipientIgnored_ = 0u;
+  spircCommandAcksSent_ = 0u;
+  spircControlNotifyMercurySequence_ = ~static_cast<uint64_t>(0);
+  spircControlNotifySent_ = 0u;
+  spircControlNotifyAcks_ = 0u;
+  spircControlNotifyBytes_ = 0u;
+  memset(spircLastCommandIdent_, 0, sizeof(spircLastCommandIdent_));
+  spircLastCommandMsgid_ = 0u;
+  spircHaveCommandAck_ = false;
+  spircStateTrackRefs_.clear();
+  spircStateTrackRefBytes_ = 0u;
+  spircStateTrackRefsTruncated_ = 0u;
+  spircStateFallbackTrackRefs_ = 0u;
+  spircStateShuffle_ = false;
+  spircStateHasShuffle_ = false;
+  spircStateRepeat_ = false;
+  spircStateHasRepeat_ = false;
   spircLastLoadTrackCount_ = 0u;
   spircLastLoadPositionMs_ = 0u;
   spircLastLoadStatus_ = 0u;
+  spircPlaybackClockRunning_ = false;
+  spircPlaybackClockBasePositionMs_ = 0u;
+  spircPlaybackClockStartedAtMs_ = 0u;
   memset(spircLastLoadContext_, 0, sizeof(spircLastLoadContext_));
   memset(spircRemoteIdent_, 0, sizeof(spircRemoteIdent_));
   memset(spircRemoteName_, 0, sizeof(spircRemoteName_));
@@ -1512,6 +2438,9 @@ void SpotifySessionProbe::reset() {
   metadataParseFailures_ = 0u;
   metadataLastStatus_ = 0;
   metadataLastBytes_ = 0u;
+  metadataRequestedAtMs_ = 0u;
+  metadataLastRoundTripMs_ = 0u;
+  metadataMaxRoundTripMs_ = 0u;
   memset(metadataTitle_, 0, sizeof(metadataTitle_));
   memset(metadataArtists_, 0, sizeof(metadataArtists_));
   memset(metadataAlbum_, 0, sizeof(metadataAlbum_));
@@ -1553,6 +2482,11 @@ void SpotifySessionProbe::reset() {
   audioKeyError0_ = 0u;
   audioKeyError1_ = 0u;
   audioKeyPending_ = false;
+  mediaKeyServiceBlocked_ = false;
+  mediaKeyBlockEvents_ = 0u;
+  mediaKeySuppressedTracks_ = 0u;
+  mediaKeyBlockError0_ = 0u;
+  mediaKeyBlockError1_ = 0u;
   productInfoPackets_ = 0u;
   productInfoBytes_ = 0u;
   productInfoHash_ = 0u;
@@ -1580,9 +2514,13 @@ void SpotifySessionProbe::reset() {
   apStreamTimeouts_ = 0u;
   apStreamProtocolErrors_ = 0u;
   apStreamStalePackets_ = 0u;
+  apStreamPostCompletePackets_ = 0u;
   apStreamTrackChangeCancels_ = 0u;
   apStreamNextChannelId_ = 0u;
   apStreamChannelId_ = 0u;
+  apStreamLastCompletedChannelId_ = 0xffffu;
+  apStreamProbeIndex_ = 0u;
+  apStreamCompletedProbes_ = 0u;
   apStreamRequestedAtMs_ = 0u;
   apStreamRequestBytes_ = 0u;
   apStreamResponsePackets_ = 0u;
@@ -1593,6 +2531,7 @@ void SpotifySessionProbe::reset() {
   apStreamReportedFileBytes_ = 0u;
   apStreamDataPackets_ = 0u;
   apStreamDataBytes_ = 0u;
+  apStreamCurrentDataBytes_ = 0u;
   apStreamCandidateFormat_ = -1;
   apStreamHeadersComplete_ = false;
   apStreamPending_ = false;
@@ -1877,6 +2816,9 @@ bool SpotifySessionProbe::runOneSession(bool reconnecting) {
   mediaHeadFetchedForTrack_ = false;
   setMediaHeadError("none");
   apStreamChannelId_ = 0u;
+  apStreamLastCompletedChannelId_ = 0xffffu;
+  apStreamProbeIndex_ = 0u;
+  apStreamCompletedProbes_ = 0u;
   apStreamRequestedAtMs_ = 0u;
   apStreamRequestBytes_ = 0u;
   apStreamResponsePackets_ = 0u;
@@ -1887,6 +2829,7 @@ bool SpotifySessionProbe::runOneSession(bool reconnecting) {
   apStreamReportedFileBytes_ = 0u;
   apStreamDataPackets_ = 0u;
   apStreamDataBytes_ = 0u;
+  apStreamCurrentDataBytes_ = 0u;
   apStreamCandidateFormat_ = -1;
   apStreamHeadersComplete_ = false;
   apStreamPending_ = false;
@@ -1936,6 +2879,23 @@ bool SpotifySessionProbe::runOneSession(bool reconnecting) {
     return true;
   };
 
+  auto currentSpircPositionMs = [&]() -> uint32_t {
+    uint32_t position = spircPlaybackClockBasePositionMs_;
+    if (spircPlaybackClockRunning_) {
+      const uint32_t elapsed = static_cast<uint32_t>(millis() - spircPlaybackClockStartedAtMs_);
+      if (UINT32_MAX - position < elapsed) position = UINT32_MAX;
+      else position += elapsed;
+    }
+    if (metadataDurationMs_ != 0u && position > metadataDurationMs_) position = metadataDurationMs_;
+    return position;
+  };
+
+  auto setSpircPlaybackClock = [&](uint32_t status, uint32_t positionMs) {
+    spircPlaybackClockBasePositionMs_ = positionMs;
+    spircPlaybackClockStartedAtMs_ = millis();
+    spircPlaybackClockRunning_ = status == 1u;
+  };
+
   auto sendSpircTransferNotify = [&](const SpircFrameInfo& remote) -> bool {
     ++spircTransferNotifyAttempts_;
     const std::vector<uint8_t> frame = buildSpircTransferNotify(
@@ -1952,13 +2912,484 @@ bool SpotifySessionProbe::runOneSession(bool reconnecting) {
     }
     ++spircTransferNotifySent_;
     ++txPackets_;
+
+    // Mirror the controller's current State.track (field 27) queue for later
+    // service-blocked Notify frames. Current SPIRC controllers derive the
+    // playable/current-track UI from this repeated TrackRef list; a context
+    // plus index without TrackRefs leaves the controller with no usable queue.
+    spircStateTrackRefs_ = remote.trackRefs;
+    spircStateTrackRefBytes_ = remote.trackRefBytes;
+    spircStateTrackRefsTruncated_ = remote.trackRefsTruncated;
+    spircStateShuffle_ = remote.shuffle;
+    spircStateHasShuffle_ = remote.hasShuffle;
+    spircStateRepeat_ = remote.repeat;
+    spircStateHasRepeat_ = remote.hasRepeat;
+    if (remote.hasLastCommandAck) {
+      strlcpy(spircLastCommandIdent_, remote.lastCommandIdent.c_str(), sizeof(spircLastCommandIdent_));
+      spircLastCommandMsgid_ = remote.lastCommandMsgid;
+      spircHaveCommandAck_ = true;
+      ++spircCommandAcksSent_;
+    }
+    if (spircStateTrackRefs_.empty() &&
+        (remote.selectedTrackGid.size() == TRACK_GID_BYTES || remote.selectedTrackUri.length() != 0u)) {
+      String uri = remote.selectedTrackUri;
+      if (uri.length() == 0u && remote.selectedTrackGid.size() == TRACK_GID_BYTES) {
+        uri = spotifyTrackUriFromGid(remote.selectedTrackGid.data(), remote.selectedTrackGid.size());
+      }
+      std::vector<uint8_t> fallback = buildSpircTrackRefMessage(remote, uri);
+      if (!fallback.empty()) {
+        spircStateTrackRefBytes_ = fallback.size();
+        spircStateTrackRefs_.push_back(std::move(fallback));
+        ++spircStateFallbackTrackRefs_;
+      }
+    }
+
     spircLocalActive_ = true;
     spircLastLoadTrackCount_ = remote.trackCount;
     spircLastLoadPositionMs_ = remote.hasPosition ? remote.position :
                                (remote.hasPositionMs ? remote.positionMs : 0u);
     spircLastLoadStatus_ = remote.hasPlayStatus ? remote.playStatus : 0u;
+    setSpircPlaybackClock(spircLastLoadStatus_, spircLastLoadPositionMs_);
     strlcpy(spircLastLoadContext_, remote.contextUri.c_str(), sizeof(spircLastLoadContext_));
     state_ = State::SpircReady;
+    return true;
+  };
+
+  auto sendSpircBlockedNotify = [&]() -> bool {
+    if (trackRefGidHex_[0] == '\0') return true;
+    ++spircBlockedNotifyAttempts_;
+    SpircFrameInfo current;
+    current.contextUri = String(spircLastLoadContext_);
+    current.positionMs = currentSpircPositionMs();
+    current.hasPositionMs = true;
+    current.playStatus = (spircLastLoadStatus_ == 1u) ? 1u : 2u;
+    current.hasPlayStatus = true;
+    current.playingTrackIndex = trackRefIndex_;
+    current.hasPlayingTrackIndex = true;
+    current.selectedTrackIndex = trackRefIndex_;
+    current.selectedTrackGid.assign(selectedTrackGid_, selectedTrackGid_ + TRACK_GID_BYTES);
+    current.selectedTrackUri = String(trackRefUri_);
+    current.trackRefs = spircStateTrackRefs_;
+    current.trackRefBytes = spircStateTrackRefBytes_;
+    current.trackRefsTruncated = spircStateTrackRefsTruncated_;
+    current.shuffle = spircStateShuffle_;
+    current.hasShuffle = spircStateHasShuffle_;
+    current.repeat = spircStateRepeat_;
+    current.hasRepeat = spircStateHasRepeat_;
+    if (spircHaveCommandAck_) {
+      current.lastCommandIdent = String(spircLastCommandIdent_);
+      current.lastCommandMsgid = spircLastCommandMsgid_;
+      current.hasLastCommandAck = true;
+    }
+    const std::vector<uint8_t> frame = buildSpircTransferNotify(
+        spircSequence_++, credentialDeviceId_, credentialDeviceName_,
+        credentialVolume16_, syncedTimestampMs(), current, current.playStatus, metadataDurationMs_);
+    spircBlockedNotifyBytes_ = frame.size();
+    spircBlockedNotifyMercurySequence_ = mercurySequence_++;
+    const std::vector<uint8_t> request = buildMercuryRequest(
+        spircBlockedNotifyMercurySequence_, String(F("SEND")), subscriptionUri, {frame});
+    if (request.empty() ||
+        !sendShannonPacket(tcp, sendCipher, sendNonce, MERCURY_SEND_COMMAND, request, IO_TIMEOUT_MS)) {
+      setError("SPIRC blocked-state Notify Mercury SEND failed");
+      return false;
+    }
+    ++spircBlockedNotifySent_;
+    ++txPackets_;
+    spircLocalActive_ = true;
+    spircLastLoadStatus_ = current.playStatus;
+    spircLastLoadPositionMs_ = current.positionMs;
+    setSpircPlaybackClock(current.playStatus, current.positionMs);
+    state_ = State::SpircReady;
+    return true;
+  };
+
+  auto rememberSpircCommandAck = [&](const SpircFrameInfo& command) {
+    if (!command.hasLastCommandAck) return;
+    strlcpy(spircLastCommandIdent_, command.lastCommandIdent.c_str(), sizeof(spircLastCommandIdent_));
+    spircLastCommandMsgid_ = command.lastCommandMsgid;
+    spircHaveCommandAck_ = true;
+  };
+
+  auto makeRetainedSpircState = [&](uint32_t index, uint32_t status, uint32_t positionMs) {
+    SpircFrameInfo current;
+    current.contextUri = String(spircLastLoadContext_);
+    current.positionMs = positionMs;
+    current.hasPositionMs = true;
+    current.playStatus = status;
+    current.hasPlayStatus = true;
+    current.playingTrackIndex = index;
+    current.hasPlayingTrackIndex = true;
+    current.selectedTrackIndex = index;
+    current.trackRefs = spircStateTrackRefs_;
+    current.trackRefBytes = spircStateTrackRefBytes_;
+    current.trackRefsTruncated = spircStateTrackRefsTruncated_;
+    current.shuffle = spircStateShuffle_;
+    current.hasShuffle = spircStateHasShuffle_;
+    current.repeat = spircStateRepeat_;
+    current.hasRepeat = spircStateHasRepeat_;
+    if (index < spircStateTrackRefs_.size()) {
+      String refContext;
+      decodeSpircTrackRef(spircStateTrackRefs_[index], current.selectedTrackGid,
+                          current.selectedTrackUri, refContext);
+      if (current.contextUri.length() == 0u && refContext.length() != 0u) current.contextUri = refContext;
+    } else if (trackRefGidHex_[0] != '\0') {
+      current.selectedTrackGid.assign(selectedTrackGid_, selectedTrackGid_ + TRACK_GID_BYTES);
+      current.selectedTrackUri = String(trackRefUri_);
+      current.selectedTrackIndex = trackRefIndex_;
+      current.playingTrackIndex = trackRefIndex_;
+    }
+    if (spircHaveCommandAck_) {
+      current.lastCommandIdent = String(spircLastCommandIdent_);
+      current.lastCommandMsgid = spircLastCommandMsgid_;
+      current.hasLastCommandAck = true;
+    }
+    return current;
+  };
+
+
+  auto resolveRetainedIndexByUri = [&](const String& uri, uint32_t& outIndex) -> bool {
+    if (!uri.startsWith(F("spotify:track:"))) return false;
+    bool found = false;
+    uint32_t matchedIndex = 0u;
+    for (size_t i = 0u; i < spircStateTrackRefs_.size(); ++i) {
+      const String canonicalUri = canonicalSpircTrackUri(spircStateTrackRefs_[i]);
+      if (canonicalUri != uri) continue;
+      if (found && matchedIndex != static_cast<uint32_t>(i)) return false;
+      matchedIndex = static_cast<uint32_t>(i);
+      found = true;
+    }
+    if (found) outIndex = matchedIndex;
+    return found;
+  };
+
+  auto resolveContextPlayerSelection = [&](const SpircFrameInfo& info, uint32_t& outIndex) -> bool {
+    const uint32_t resolveStartedUs = micros();
+    struct ResolveTimingGuard {
+      uint32_t started;
+      uint32_t& last;
+      uint32_t& max;
+      ~ResolveTimingGuard() {
+        const uint32_t elapsed = micros() - started;
+        last = elapsed;
+        if (elapsed > max) max = elapsed;
+      }
+    } resolveTiming{resolveStartedUs, spircContextResolveLastUs_, spircContextResolveMaxUs_};
+    if (!info.hasContextPlayerState) return false;
+    ++spircContextPlayerFrames_;
+    spircContextPlayerBytes_ += info.contextPlayerStateBytes;
+    spircContextPlayerLastBytes_ = info.contextPlayerStateBytes;
+    spircContextPlayerLastHash_ = info.contextPlayerHash;
+    spircContextPlayerPrintablePct_ = info.contextPlayerPrintablePct;
+    spircContextPlayerProtoValid_ = info.contextPlayerProtoValid;
+    spircContextPlayerProtoFields_ = info.contextPlayerProtoFields;
+    spircContextPlayerProtoLengthFields_ = info.contextPlayerProtoLengthFields;
+    spircContextPlayerQueueMatches_ = 0u;
+    spircContextPlayerNonCurrentMatches_ = 0u;
+    spircContextPlayerUniqueIndex_ = -1;
+    spircContextQueueRefs_ = 0u;
+    spircContextQueueGidOnly_ = 0u;
+    spircContextQueueNativeUri_ = 0u;
+    spircContextQueueCanonical_ = 0u;
+    spircContextSkipObjects_ = 0u;
+    spircContextSkipUidCandidates_ = 0u;
+    spircContextSkipUriCandidates_ = 0u;
+    spircContextSkipIndexCandidates_ = 0u;
+    spircContextSkipUidResolved_ = 0u;
+    spircContextSkipQueueResolved_ = 0u;
+    spircContextSkipIndexValidated_ = 0u;
+    spircContextSkipIndexIgnored_ = 0u;
+    spircContextSkipAmbiguous_ = 0u;
+    spircContextSkipUniqueIndex_ = -1;
+    for (const auto& trackRef : spircStateTrackRefs_) {
+      bool hadNativeUri = false;
+      bool hadGid = false;
+      const String canonicalUri = canonicalSpircTrackUri(trackRef, &hadNativeUri, &hadGid);
+      ++spircContextQueueRefs_;
+      if (hadNativeUri) ++spircContextQueueNativeUri_;
+      if (hadGid && !hadNativeUri) ++spircContextQueueGidOnly_;
+      if (canonicalUri.startsWith(F("spotify:track:"))) ++spircContextQueueCanonical_;
+    }
+    spircContextInflateBytes_ = 0u;
+    spircContextInflatePrintablePct_ = 0u;
+    spircContextInflateStatus_[0] = '\0';
+    spircContextInflateEncoding_[0] = '\0';
+    if (info.contextPlayerEncoding.length() != 0u) {
+      strlcpy(spircContextPlayerEncoding_, info.contextPlayerEncoding.c_str(), sizeof(spircContextPlayerEncoding_));
+    }
+    if (info.contextPlayerPrefix.length() != 0u) {
+      strlcpy(spircContextPlayerPrefix_, info.contextPlayerPrefix.c_str(), sizeof(spircContextPlayerPrefix_));
+    }
+    if (info.contextPlayerMagic.length() != 0u) {
+      strlcpy(spircContextPlayerMagic_, info.contextPlayerMagic.c_str(), sizeof(spircContextPlayerMagic_));
+    }
+    if (info.contextPlayerProtoMap.length() != 0u) {
+      strlcpy(spircContextPlayerProtoMap_, info.contextPlayerProtoMap.c_str(), sizeof(spircContextPlayerProtoMap_));
+    } else {
+      spircContextPlayerProtoMap_[0] = '\0';
+    }
+    if (info.contextPlayerEndpoint.length() != 0u) {
+      strlcpy(spircContextPlayerEndpoint_, info.contextPlayerEndpoint.c_str(), sizeof(spircContextPlayerEndpoint_));
+      if (info.contextPlayerEndpoint == F("play")) ++spircContextPlayerPlay_;
+    }
+
+    auto scanRetainedQueue = [&](const uint8_t* payload, size_t payloadSize, uint32_t& selected) -> bool {
+      if (!payload || payloadSize == 0u || spircStateTrackRefs_.empty()) return false;
+      uint32_t uniqueNonCurrent = 0xffffffffu;
+      uint32_t nonCurrent = 0u;
+      uint32_t matches = 0u;
+      for (size_t i = 0u; i < spircStateTrackRefs_.size(); ++i) {
+        std::vector<uint8_t> gid;
+        String uri;
+        String context;
+        if (!decodeSpircTrackRef(spircStateTrackRefs_[i], gid, uri, context)) continue;
+        const bool uriHit = uri.length() != 0u &&
+            bytesContain(payload, payloadSize,
+                         reinterpret_cast<const uint8_t*>(uri.c_str()), uri.length());
+        const bool gidHit = gid.size() == TRACK_GID_BYTES &&
+            bytesContain(payload, payloadSize, gid.data(), gid.size());
+        if (!uriHit && !gidHit) continue;
+        ++matches;
+        if (i != trackRefIndex_) {
+          ++nonCurrent;
+          uniqueNonCurrent = static_cast<uint32_t>(i);
+        }
+      }
+      spircContextPlayerQueueMatches_ = matches;
+      spircContextPlayerNonCurrentMatches_ = nonCurrent;
+      if (nonCurrent == 1u && uniqueNonCurrent < spircStateTrackRefs_.size()) {
+        spircContextPlayerUniqueIndex_ = static_cast<int32_t>(uniqueNonCurrent);
+        selected = uniqueNonCurrent;
+        return true;
+      }
+      return false;
+    };
+
+    // r12: keep r11's bounded multi-skip enumeration, but resolve modern URI
+    // identities against a canonical classic queue where GID-only TrackRefs are
+    // converted to spotify:track URIs. track_index remains diagnostic/advisory:
+    // it is never allowed to select a queue entry by itself.
+    auto resolveJsonSkipCandidates = [&](const uint8_t* payload, size_t payloadSize,
+                                         uint32_t& selected) -> bool {
+      spircContextSkipObjects_ = 0u;
+      spircContextSkipUidCandidates_ = 0u;
+      spircContextSkipUriCandidates_ = 0u;
+      spircContextSkipIndexCandidates_ = 0u;
+      spircContextSkipUidResolved_ = 0u;
+      spircContextSkipQueueResolved_ = 0u;
+      spircContextSkipIndexValidated_ = 0u;
+      spircContextSkipIndexIgnored_ = 0u;
+      spircContextSkipAmbiguous_ = 0u;
+      spircContextSkipUniqueIndex_ = -1;
+      if (!payload || payloadSize == 0u || spircStateTrackRefs_.empty()) return false;
+
+      bool haveUnique = false;
+      uint32_t unique = 0u;
+      auto consider = [&](uint32_t idx) {
+        if (idx >= spircStateTrackRefs_.size() || idx == trackRefIndex_) return;
+        ++spircContextSkipQueueResolved_;
+        if (!haveUnique) {
+          unique = idx;
+          haveUnique = true;
+        } else if (unique != idx) {
+          ++spircContextSkipAmbiguous_;
+        }
+      };
+
+      size_t search = 0u;
+      while (search < payloadSize && spircContextSkipObjects_ < 16u) {
+        size_t skipStart = payloadSize;
+        size_t keyPos = payloadSize;
+        if (!findJsonKeyValueStart(payload, payloadSize, "skip_to", skipStart,
+                                   search, payloadSize, &keyPos)) break;
+        ++spircContextSkipObjects_;
+
+        size_t skipEnd = payloadSize;
+        if (skipStart < payloadSize && (payload[skipStart] == '{' || payload[skipStart] == '[')) {
+          if (!jsonCompositeEnd(payload, payloadSize, skipStart, skipEnd)) skipEnd = payloadSize;
+        } else {
+          skipEnd = std::min(payloadSize, skipStart + 2048u);
+        }
+
+        bool objectIdentityResolved = false;
+        uint32_t objectIdentityIndex = 0u;
+        auto rememberIdentity = [&](uint32_t idx) {
+          if (!objectIdentityResolved) {
+            objectIdentityIndex = idx;
+            objectIdentityResolved = true;
+          } else if (objectIdentityIndex != idx) {
+            ++spircContextSkipAmbiguous_;
+          }
+          consider(idx);
+        };
+
+        String uri;
+        if (extractJsonQuotedValue(payload, payloadSize, "track_uri", uri, skipStart, skipEnd)) {
+          ++spircContextSkipUriCandidates_;
+          uint32_t idx = 0u;
+          if (uri.startsWith(F("spotify:track:")) && resolveRetainedIndexByUri(uri, idx)) rememberIdentity(idx);
+        }
+
+        String uid;
+        if (extractJsonQuotedValue(payload, payloadSize, "track_uid", uid, skipStart, skipEnd)) {
+          ++spircContextSkipUidCandidates_;
+          String uidUri;
+          if (resolveContextPlayerUidToUri(payload, payloadSize, uid, uidUri)) {
+            ++spircContextSkipUidResolved_;
+            uint32_t idx = 0u;
+            if (resolveRetainedIndexByUri(uidUri, idx)) rememberIdentity(idx);
+          }
+        }
+
+        uint32_t idxValue = 0u;
+        if (extractJsonUintValue(payload, payloadSize, "track_index", idxValue, skipStart, skipEnd)) {
+          ++spircContextSkipIndexCandidates_;
+          if (objectIdentityResolved && idxValue == objectIdentityIndex) {
+            ++spircContextSkipIndexValidated_;
+          } else {
+            ++spircContextSkipIndexIgnored_;
+          }
+        }
+
+        const size_t next = skipEnd > keyPos ? skipEnd : keyPos + 1u;
+        search = next > search ? next : search + 1u;
+      }
+
+      if (haveUnique && spircContextSkipAmbiguous_ == 0u) {
+        selected = unique;
+        spircContextSkipUniqueIndex_ = static_cast<int32_t>(unique);
+        return true;
+      }
+      return false;
+    };
+
+    // Historical uncompressed JSON uses the same bounded multi-skip safety as
+    // gzip JSON. Do not let parseContextPlayerState's first skip_to shortcut
+    // bypass convergence across all explicit targets.
+    if (info.contextPlayerEncoding == F("json") && !info.contextPlayerState.empty() &&
+        resolveJsonSkipCandidates(info.contextPlayerState.data(), info.contextPlayerState.size(), outIndex)) {
+      ++spircContextPlayerSelect_;
+      ++spircContextPlayerBySkipScan_;
+      return true;
+    }
+
+    // Non-JSON schema-specific URI evidence remains supported. A naked context
+    // index is intentionally not authoritative because modern indices may be
+    // page-relative rather than indices into the retained classic field-27 queue.
+    uint32_t schemaIndex = 0u;
+    if (info.contextPlayerEncoding != F("json") && info.contextPlayerTargetUri.length() != 0u &&
+        resolveRetainedIndexByUri(info.contextPlayerTargetUri, schemaIndex) && schemaIndex != trackRefIndex_) {
+      outIndex = schemaIndex;
+      ++spircContextPlayerSelect_;
+      ++spircContextPlayerByUri_;
+      if (info.contextPlayerUidResolved) ++spircContextPlayerByUid_;
+      return true;
+    }
+
+    // r8a hardware proved that current Android wraps field 19 in gzip
+    // (1f 8b 08...). Inflate the bounded payload using the ESP32-S3 ROM miniz
+    // raw-DEFLATE helper. The output exists only for this frame and is never
+    // serialized or retained. The gzip trailer's ISIZE is hard-bounded to
+    // MAX_CONTEXT_PLAYER_INFLATED_BYTES and CRC32 is verified before parsing.
+    if (!info.contextPlayerState.empty() && info.contextPlayerMagic == F("gzip")) {
+      ++spircContextInflateAttempts_;
+      ContextPlayerInflateResult inflated = inflateContextPlayerGzip(
+          info.contextPlayerState.data(), info.contextPlayerState.size());
+      strlcpy(spircContextInflateStatus_, inflated.status, sizeof(spircContextInflateStatus_));
+      if (inflated.ok) {
+        ++spircContextInflateOk_;
+        spircContextInflateBytes_ = inflated.size;
+        spircContextInflatePrintablePct_ = contextPlayerPrintablePct(inflated.data, inflated.size);
+
+        String decodedEncoding;
+        String decodedEndpoint;
+        String decodedUid;
+        String decodedUri;
+        uint32_t decodedIndex = 0u;
+        bool hasDecodedIndex = false;
+        bool decodedUidResolved = false;
+        parseContextPlayerState(inflated.data, inflated.size, decodedEncoding, decodedEndpoint,
+                                decodedUid, decodedUri, decodedIndex, hasDecodedIndex,
+                                decodedUidResolved);
+        if (decodedEncoding.length() != 0u) {
+          strlcpy(spircContextInflateEncoding_, decodedEncoding.c_str(), sizeof(spircContextInflateEncoding_));
+        }
+        if (decodedEndpoint.length() != 0u) {
+          strlcpy(spircContextPlayerEndpoint_, decodedEndpoint.c_str(), sizeof(spircContextPlayerEndpoint_));
+          if (decodedEndpoint == F("play")) ++spircContextPlayerPlay_;
+        }
+
+        bool selected = false;
+        uint32_t decodedResolvedIndex = 0u;
+        if (decodedEncoding == F("json") &&
+            resolveJsonSkipCandidates(inflated.data, inflated.size, outIndex)) {
+          ++spircContextPlayerSelect_;
+          ++spircContextPlayerBySkipScan_;
+          selected = true;
+        } else if (decodedEncoding != F("json") && decodedUri.length() != 0u &&
+                   resolveRetainedIndexByUri(decodedUri, decodedResolvedIndex) &&
+                   decodedResolvedIndex != trackRefIndex_) {
+          outIndex = decodedResolvedIndex;
+          ++spircContextPlayerSelect_;
+          ++spircContextPlayerByUri_;
+          if (decodedUidResolved) ++spircContextPlayerByUid_;
+          selected = true;
+        } else if (scanRetainedQueue(inflated.data, inflated.size, outIndex)) {
+          ++spircContextPlayerSelect_;
+          ++spircContextPlayerByScan_;
+          selected = true;
+        } else if ((decodedEndpoint == F("play") || decodedEncoding == F("proto")) &&
+                   (decodedUid.length() != 0u || decodedUri.length() != 0u || hasDecodedIndex)) {
+          ++spircContextPlayerUnresolved_;
+        }
+
+        if (selected) ++spircContextPlayerByInflate_;
+        freeContextPlayerInflate(inflated);
+        if (selected) return true;
+      } else {
+        ++spircContextInflateFailures_;
+      }
+    }
+
+    // Uncompressed/unknown fallback: correlate exact queue identities directly
+    // against the bounded raw field-19 bytes. Act only on one unique non-current
+    // match; never guess when the payload contains zero or multiple candidates.
+    if (!info.contextPlayerState.empty() && scanRetainedQueue(
+            info.contextPlayerState.data(), info.contextPlayerState.size(), outIndex)) {
+      ++spircContextPlayerSelect_;
+      ++spircContextPlayerByScan_;
+      return true;
+    }
+
+    const bool selectionBearingPayload = info.contextPlayerEndpoint == F("play") ||
+                                         info.contextPlayerEncoding == F("proto");
+    if (selectionBearingPayload &&
+        (info.contextPlayerTargetUid.length() != 0u || info.contextPlayerTargetUri.length() != 0u ||
+         info.hasContextPlayerTargetIndex)) {
+      ++spircContextPlayerUnresolved_;
+    }
+    return false;
+  };
+
+  auto sendSpircControlNotify = [&](SpircFrameInfo current) -> bool {
+    const std::vector<uint8_t> frame = buildSpircTransferNotify(
+        spircSequence_++, credentialDeviceId_, credentialDeviceName_,
+        credentialVolume16_, syncedTimestampMs(), current, current.playStatus);
+    spircControlNotifyBytes_ = frame.size();
+    spircControlNotifyMercurySequence_ = mercurySequence_++;
+    const std::vector<uint8_t> request = buildMercuryRequest(
+        spircControlNotifyMercurySequence_, String(F("SEND")), subscriptionUri, {frame});
+    if (request.empty() ||
+        !sendShannonPacket(tcp, sendCipher, sendNonce, MERCURY_SEND_COMMAND, request, IO_TIMEOUT_MS)) {
+      setError("SPIRC control Notify Mercury SEND failed");
+      return false;
+    }
+    ++spircControlNotifySent_;
+    ++txPackets_;
+    if (current.hasLastCommandAck) ++spircCommandAcksSent_;
+    spircLocalActive_ = true;
+    spircLastLoadStatus_ = current.playStatus;
+    spircLastLoadPositionMs_ = current.positionMs;
+    setSpircPlaybackClock(current.playStatus, current.positionMs);
     return true;
   };
 
@@ -1995,6 +3426,7 @@ bool SpotifySessionProbe::runOneSession(bool reconnecting) {
     if (metadataMercurySequence_ != ~static_cast<uint64_t>(0)) {
       if (sameTrack) return true;
       metadataMercurySequence_ = ~static_cast<uint64_t>(0);
+      metadataRequestedAtMs_ = 0u;
     }
     if (sameTrack && (audioKeyPending_ || audioKeyCandidateCount_ != 0u)) {
       return true;
@@ -2016,6 +3448,9 @@ bool SpotifySessionProbe::runOneSession(bool reconnecting) {
       setMediaHeadError("none");
       if (apStreamPending_) ++apStreamTrackChangeCancels_;
       apStreamChannelId_ = 0u;
+      apStreamLastCompletedChannelId_ = 0xffffu;
+      apStreamProbeIndex_ = 0u;
+      apStreamCompletedProbes_ = 0u;
       apStreamRequestedAtMs_ = 0u;
       apStreamRequestBytes_ = 0u;
       apStreamResponsePackets_ = 0u;
@@ -2026,6 +3461,7 @@ bool SpotifySessionProbe::runOneSession(bool reconnecting) {
       apStreamReportedFileBytes_ = 0u;
       apStreamDataPackets_ = 0u;
       apStreamDataBytes_ = 0u;
+      apStreamCurrentDataBytes_ = 0u;
       apStreamCandidateFormat_ = -1;
       apStreamHeadersComplete_ = false;
       apStreamPending_ = false;
@@ -2035,7 +3471,11 @@ bool SpotifySessionProbe::runOneSession(bool reconnecting) {
 
     trackRefIndex_ = remote.selectedTrackIndex;
     strlcpy(trackRefGidHex_, gidHex.c_str(), sizeof(trackRefGidHex_));
-    strlcpy(trackRefUri_, remote.selectedTrackUri.c_str(), sizeof(trackRefUri_));
+    const String effectiveTrackUri = remote.selectedTrackUri.length() != 0u
+                                         ? remote.selectedTrackUri
+                                         : spotifyTrackUriFromGid(remote.selectedTrackGid.data(),
+                                                                  remote.selectedTrackGid.size());
+    strlcpy(trackRefUri_, effectiveTrackUri.c_str(), sizeof(trackRefUri_));
     memcpy(selectedTrackGid_, remote.selectedTrackGid.data(), TRACK_GID_BYTES);
     memset(selectedAudioFileId_, 0, sizeof(selectedAudioFileId_));
     memset(audioKey_, 0, sizeof(audioKey_));
@@ -2051,10 +3491,12 @@ bool SpotifySessionProbe::runOneSession(bool reconnecting) {
     if (request.empty() ||
         !sendShannonPacket(tcp, sendCipher, sendNonce, MERCURY_SEND_COMMAND, request, IO_TIMEOUT_MS)) {
       metadataMercurySequence_ = ~static_cast<uint64_t>(0);
+      metadataRequestedAtMs_ = 0u;
       setError("track metadata Mercury GET failed");
       return false;
     }
     ++txPackets_;
+    metadataRequestedAtMs_ = millis();
     return true;
   };
 
@@ -2104,34 +3546,23 @@ bool SpotifySessionProbe::runOneSession(bool reconnecting) {
     return sendAudioKeyCandidate(static_cast<uint8_t>(audioKeyCandidateIndex_ + 1u));
   };
 
-  auto startApStreamCanary = [&]() -> bool {
-    if (apStreamAttemptedForTrack_) return true;
-    apStreamAttemptedForTrack_ = true;
-    ++apStreamAttempts_;
+  auto sendApStreamProbe = [&](uint8_t probeIndex) -> bool {
+    if (probeIndex >= AP_STREAM_PROBE_COUNT || audioKeyCandidateCount_ == 0u) return false;
+    apStreamProbeIndex_ = probeIndex;
     apStreamChannelId_ = apStreamNextChannelId_++;
     apStreamRequestedAtMs_ = 0u;
     apStreamRequestBytes_ = 0u;
-    apStreamResponsePackets_ = 0u;
     apStreamLastCommand_ = 0u;
     apStreamFailureCode_ = 0u;
-    apStreamHeaderCount_ = 0u;
-    apStreamHeaderBytes_ = 0u;
-    apStreamReportedFileBytes_ = 0u;
-    apStreamDataPackets_ = 0u;
-    apStreamDataBytes_ = 0u;
+    apStreamCurrentDataBytes_ = 0u;
     apStreamHeadersComplete_ = false;
     apStreamPending_ = false;
-    setApStreamError("none");
 
-    if (audioKeyCandidateCount_ == 0u) {
-      ++apStreamProtocolErrors_;
-      setApStreamError("no AudioFile candidate for AP stream");
-      return true;
-    }
-    apStreamCandidateFormat_ = audioKeyCandidateFormats_[0];
+    const uint32_t offsetWords = static_cast<uint32_t>(probeIndex) * AP_STREAM_CANARY_WORDS;
     const std::vector<uint8_t> request = buildApStreamChunkRequest(
-        apStreamChannelId_, audioKeyCandidateFileIds_[0], 0u, AP_STREAM_CANARY_WORDS);
+        apStreamChannelId_, audioKeyCandidateFileIds_[0], offsetWords, AP_STREAM_CANARY_WORDS);
     apStreamRequestBytes_ = request.size();
+    ++apStreamAttempts_;
     if (request.size() != 46u) {
       ++apStreamProtocolErrors_;
       setApStreamError("AP StreamChunk request construction failed");
@@ -2147,6 +3578,31 @@ bool SpotifySessionProbe::runOneSession(bool reconnecting) {
     apStreamPending_ = true;
     apStreamRequestedAtMs_ = millis();
     return true;
+  };
+
+  auto startApStreamCanary = [&]() -> bool {
+    if (apStreamAttemptedForTrack_) return true;
+    apStreamAttemptedForTrack_ = true;
+    apStreamLastCompletedChannelId_ = 0xffffu;
+    apStreamProbeIndex_ = 0u;
+    apStreamCompletedProbes_ = 0u;
+    apStreamResponsePackets_ = 0u;
+    apStreamHeaderCount_ = 0u;
+    apStreamHeaderBytes_ = 0u;
+    apStreamReportedFileBytes_ = 0u;
+    apStreamDataPackets_ = 0u;
+    apStreamDataBytes_ = 0u;
+    apStreamCurrentDataBytes_ = 0u;
+    apStreamPostCompletePackets_ = 0u;
+    setApStreamError("none");
+
+    if (audioKeyCandidateCount_ == 0u) {
+      ++apStreamProtocolErrors_;
+      setApStreamError("no AudioFile candidate for AP stream");
+      return true;
+    }
+    apStreamCandidateFormat_ = audioKeyCandidateFormats_[0];
+    return sendApStreamProbe(0u);
   };
 
   while (!stopRequested_) {
@@ -2230,6 +3686,11 @@ bool SpotifySessionProbe::runOneSession(bool reconnecting) {
         continue;
       }
       const uint16_t channelId = readBe16At(payload, 0u);
+      if (apStreamAttemptedForTrack_ && channelId == apStreamLastCompletedChannelId_ &&
+          (!apStreamPending_ || channelId != apStreamChannelId_)) {
+        ++apStreamPostCompletePackets_;
+        continue;
+      }
       if (!apStreamAttemptedForTrack_ || channelId != apStreamChannelId_ || !apStreamPending_) {
         ++apStreamStalePackets_;
         continue;
@@ -2293,20 +3754,26 @@ bool SpotifySessionProbe::runOneSession(bool reconnecting) {
 
       if (apStreamHeadersComplete_) {
         if (offset < payload.size()) {
+          const size_t packetDataBytes = payload.size() - offset;
           ++apStreamDataPackets_;
-          apStreamDataBytes_ += payload.size() - offset;
-          if (apStreamDataBytes_ >= AP_STREAM_CANARY_BYTES) {
-            apStreamPending_ = false;
-            apStreamRequestedAtMs_ = 0u;
-            ++apStreamSuccesses_;
-            setApStreamError("none");
-          }
+          apStreamDataBytes_ += packetDataBytes;
+          apStreamCurrentDataBytes_ += packetDataBytes;
         } else if (wasDataState) {
           apStreamPending_ = false;
           apStreamRequestedAtMs_ = 0u;
-          if (apStreamDataBytes_ != 0u) {
+          apStreamLastCompletedChannelId_ = apStreamChannelId_;
+          if (apStreamCurrentDataBytes_ >= AP_STREAM_CANARY_BYTES) {
             ++apStreamSuccesses_;
+            ++apStreamCompletedProbes_;
             setApStreamError("none");
+            if (apStreamCompletedProbes_ < AP_STREAM_PROBE_COUNT) {
+              if (!sendApStreamProbe(apStreamCompletedProbes_)) {
+                tcp.stop(); state_ = State::Failed; return false;
+              }
+            }
+          } else if (apStreamCurrentDataBytes_ != 0u) {
+            ++apStreamProtocolErrors_;
+            setApStreamError("AP StreamChunk closed short");
           } else {
             ++apStreamProtocolErrors_;
             setApStreamError("AP StreamChunk closed without data");
@@ -2376,8 +3843,30 @@ bool SpotifySessionProbe::runOneSession(bool reconnecting) {
           audioKeyCandidateError1_[candidateIndex] = audioKeyError1_;
         }
         const bool hasNext = candidateIndex + 1u < audioKeyCandidateCount_;
-        setError(hasNext ? "Spotify AesKeyError; trying next audio file" :
-                           "Spotify AesKeyError for all audio files");
+        if (hasNext) {
+          setError("Spotify AesKeyError; trying next audio file");
+        } else {
+          bool allRejected01 = audioKeyCandidateCount_ != 0u;
+          for (uint8_t i = 0u; i < audioKeyCandidateCount_; ++i) {
+            if (audioKeyCandidateResultCommand_[i] != AES_KEY_ERROR_COMMAND ||
+                audioKeyCandidateError0_[i] != 0u || audioKeyCandidateError1_[i] != 1u) {
+              allRejected01 = false;
+              break;
+            }
+          }
+          if (allRejected01) {
+            if (!mediaKeyServiceBlocked_) ++mediaKeyBlockEvents_;
+            mediaKeyServiceBlocked_ = true;
+            mediaKeyBlockError0_ = 0u;
+            mediaKeyBlockError1_ = 1u;
+            setError("Spotify media key service-blocked (0:1)");
+            if (!sendSpircBlockedNotify()) {
+              tcp.stop(); state_ = State::Failed; return false;
+            }
+          } else {
+            setError("Spotify AesKeyError for all audio files");
+          }
+        }
         if (hasNext && !advanceAudioKeyCandidate()) {
           tcp.stop(); state_ = State::Failed; return false;
         }
@@ -2530,24 +4019,151 @@ bool SpotifySessionProbe::runOneSession(bool reconnecting) {
                 if (info.name.length() != 0u) strlcpy(spircRemoteName_, info.name.c_str(), sizeof(spircRemoteName_));
                 if (info.hasActive) spircRemoteActive_ = info.active;
               }
+              bool addressedToUs = info.recipients.empty();
+              for (const String& recipient : info.recipients) {
+                if (recipient == String(credentialDeviceId_)) { addressedToUs = true; break; }
+              }
+              if (!self && !addressedToUs) {
+                ++spircRecipientIgnored_;
+                state_ = State::SpircReady;
+                continue;
+              }
+              if (!self) rememberSpircCommandAck(info);
+
               if (info.type == SPIRC_NOTIFY) {
                 ++spircNotifyFrames_;
               } else if (info.type == SPIRC_LOAD) {
                 ++spircLoadFrames_;
-                // A remote Load is the Connect transfer request. cspot accepts it by
-                // becoming active and immediately sending a Notify containing the
-                // transferred context/position. Playback acquisition remains outside
-                // this diagnostic gate, but the control-plane acknowledgement is real.
+                const uint32_t selectionApplyStartedUs = micros();
+                uint32_t contextSelectedIndex = trackRefIndex_;
+                if (!self && resolveContextPlayerSelection(info, contextSelectedIndex) &&
+                    contextSelectedIndex < spircStateTrackRefs_.size() && contextSelectedIndex != trackRefIndex_) {
+                  SpircFrameInfo selected = makeRetainedSpircState(contextSelectedIndex,
+                      info.hasPlayStatus && info.playStatus == 2u ? 2u : 1u,
+                      info.hasPositionMs ? info.positionMs : 0u);
+                  if (!sendSpircControlNotify(selected)) { tcp.stop(); state_ = State::Failed; return false; }
+                  spircSelectionApplyLastUs_ = micros() - selectionApplyStartedUs;
+                  if (spircSelectionApplyLastUs_ > spircSelectionApplyMaxUs_) {
+                    spircSelectionApplyMaxUs_ = spircSelectionApplyLastUs_;
+                  }
+                  if (!sendTrackMetadataRequest(selected)) { tcp.stop(); state_ = State::Failed; return false; }
+                  state_ = State::SpircReady;
+                  continue;
+                }
+                const bool hasTrackIdentity =
+                    info.selectedTrackGid.size() == TRACK_GID_BYTES ||
+                    info.selectedTrackUri.length() != 0u || info.trackCount != 0u;
+                if (!self && !hasTrackIdentity) {
+                  ++spircEmptyLoadsIgnored_;
+                  SpircFrameInfo current = makeRetainedSpircState(trackRefIndex_,
+                      spircLastLoadStatus_ == 1u ? 1u : 2u, currentSpircPositionMs());
+                  if (!sendSpircControlNotify(current)) { tcp.stop(); state_ = State::Failed; return false; }
+                  state_ = State::SpircReady;
+                  continue;
+                }
+                const bool duplicateTrack = !self && spircLocalActive_ &&
+                    info.selectedTrackGid.size() == TRACK_GID_BYTES &&
+                    trackRefGidHex_[0] != '\0' &&
+                    memcmp(selectedTrackGid_, info.selectedTrackGid.data(), TRACK_GID_BYTES) == 0;
+                if (duplicateTrack) {
+                  ++spircDuplicateLoadsIgnored_;
+                  if (info.hasContextPlayerState) ++spircDuplicateLoadsWithUnknownContext_;
+                  SpircFrameInfo current = makeRetainedSpircState(trackRefIndex_,
+                      spircLastLoadStatus_ == 1u ? 1u : 2u, currentSpircPositionMs());
+                  if (!sendSpircControlNotify(current)) { tcp.stop(); state_ = State::Failed; return false; }
+                  ++spircDuplicateLoadsAcked_;
+                  state_ = State::SpircReady;
+                  continue;
+                }
                 if (!self && !sendSpircTransferNotify(info)) {
                   tcp.stop(); state_ = State::Failed; return false;
                 }
                 if (!self && !sendTrackMetadataRequest(info)) {
                   tcp.stop(); state_ = State::Failed; return false;
                 }
+              } else if (info.type == SPIRC_REPLACE) {
+                ++spircReplaceFrames_;
+                uint32_t contextSelectedIndex = trackRefIndex_;
+                const bool selected = !self && resolveContextPlayerSelection(info, contextSelectedIndex);
+                if (!self && selected && contextSelectedIndex < spircStateTrackRefs_.size()) {
+                  SpircFrameInfo replacement = makeRetainedSpircState(contextSelectedIndex, 1u, 0u);
+                  if (!sendSpircControlNotify(replacement)) { tcp.stop(); state_ = State::Failed; return false; }
+                  if (contextSelectedIndex != trackRefIndex_ && !sendTrackMetadataRequest(replacement)) {
+                    tcp.stop(); state_ = State::Failed; return false;
+                  }
+                } else if (!self) {
+                  // Replace is also used by classic controllers for operations such as
+                  // add_to_queue. Keep those bounded/non-destructive until implemented,
+                  // but ACK our current state so the controller does not retry forever.
+                  SpircFrameInfo current = makeRetainedSpircState(trackRefIndex_,
+                      spircLastLoadStatus_ == 1u ? 1u : 2u, currentSpircPositionMs());
+                  if (!sendSpircControlNotify(current)) { tcp.stop(); state_ = State::Failed; return false; }
+                }
               } else if (info.type == SPIRC_PLAY) {
                 ++spircPlayFrames_;
+                if (!self) {
+                  // A current controller can encode a direct queue selection in the
+                  // Play frame itself (state index / playing_track_index) without a
+                  // new Load. Resolve that index against the retained field-27 queue.
+                  uint32_t requestedIndex = trackRefIndex_;
+                  bool explicitSelection = false;
+                  if (info.hasPlayingTrackIndex) {
+                    requestedIndex = info.playingTrackIndex;
+                    explicitSelection = true;
+                  } else if (info.hasStateIndex) {
+                    requestedIndex = info.stateIndex;
+                    explicitSelection = true;
+                  }
+                  if (explicitSelection && requestedIndex < spircStateTrackRefs_.size() &&
+                      requestedIndex != trackRefIndex_) {
+                    ++spircPlaySelectFrames_;
+                    ++spircPlaySelectByIndex_;
+                    SpircFrameInfo selected = makeRetainedSpircState(requestedIndex, 1u, 0u);
+                    if (!sendSpircControlNotify(selected)) { tcp.stop(); state_ = State::Failed; return false; }
+                    if (!sendTrackMetadataRequest(selected)) { tcp.stop(); state_ = State::Failed; return false; }
+                  } else {
+                    SpircFrameInfo current = makeRetainedSpircState(trackRefIndex_, 1u, currentSpircPositionMs());
+                    if (!sendSpircControlNotify(current)) { tcp.stop(); state_ = State::Failed; return false; }
+                  }
+                }
               } else if (info.type == SPIRC_PAUSE) {
                 ++spircPauseFrames_;
+                if (!self) {
+                  SpircFrameInfo current = makeRetainedSpircState(trackRefIndex_, 2u, currentSpircPositionMs());
+                  if (!sendSpircControlNotify(current)) { tcp.stop(); state_ = State::Failed; return false; }
+                }
+              } else if (info.type == SPIRC_PLAY_PAUSE) {
+                ++spircPlayPauseFrames_;
+                if (!self) {
+                  const uint32_t status = spircLastLoadStatus_ == 1u ? 2u : 1u;
+                  SpircFrameInfo current = makeRetainedSpircState(trackRefIndex_, status, currentSpircPositionMs());
+                  if (!sendSpircControlNotify(current)) { tcp.stop(); state_ = State::Failed; return false; }
+                }
+              } else if (info.type == SPIRC_SEEK) {
+                ++spircSeekFrames_;
+                if (!self) {
+                  const uint32_t position = info.hasPosition ? info.position :
+                                            (info.hasPositionMs ? info.positionMs : currentSpircPositionMs());
+                  SpircFrameInfo current = makeRetainedSpircState(trackRefIndex_,
+                      spircLastLoadStatus_ == 1u ? 1u : 2u, position);
+                  if (!sendSpircControlNotify(current)) { tcp.stop(); state_ = State::Failed; return false; }
+                }
+              } else if (info.type == SPIRC_NEXT || info.type == SPIRC_PREV) {
+                if (info.type == SPIRC_NEXT) ++spircNextFrames_; else ++spircPrevFrames_;
+                if (!self && !spircStateTrackRefs_.empty()) {
+                  uint32_t nextIndex = trackRefIndex_;
+                  if (info.type == SPIRC_NEXT) {
+                    if (nextIndex + 1u < spircStateTrackRefs_.size()) ++nextIndex;
+                  } else if (nextIndex != 0u) {
+                    --nextIndex;
+                  }
+                  SpircFrameInfo nextState = makeRetainedSpircState(nextIndex,
+                      spircLastLoadStatus_ == 1u ? 1u : 2u, 0u);
+                  if (!sendSpircControlNotify(nextState)) { tcp.stop(); state_ = State::Failed; return false; }
+                  if (nextIndex != trackRefIndex_ && !sendTrackMetadataRequest(nextState)) {
+                    tcp.stop(); state_ = State::Failed; return false;
+                  }
+                }
               }
               state_ = State::SpircReady;
             }
@@ -2571,8 +4187,25 @@ bool SpotifySessionProbe::runOneSession(bool reconnecting) {
             state_ = State::SpircReady;
           }
           if (liveCommand == MERCURY_SEND_COMMAND &&
+              sequence == spircBlockedNotifyMercurySequence_) {
+            ++spircBlockedNotifyAcks_;
+            state_ = State::SpircReady;
+          }
+          if (liveCommand == MERCURY_SEND_COMMAND &&
+              sequence == spircControlNotifyMercurySequence_) {
+            ++spircControlNotifyAcks_;
+            state_ = State::SpircReady;
+          }
+          if (liveCommand == MERCURY_SEND_COMMAND &&
               sequence == metadataMercurySequence_) {
             ++metadataResponses_;
+            if (metadataRequestedAtMs_ != 0u) {
+              metadataLastRoundTripMs_ = millis() - metadataRequestedAtMs_;
+              if (metadataLastRoundTripMs_ > metadataMaxRoundTripMs_) {
+                metadataMaxRoundTripMs_ = metadataLastRoundTripMs_;
+              }
+              metadataRequestedAtMs_ = 0u;
+            }
             metadataLastStatus_ = mercuryStatus;
             metadataLastBytes_ = parts.empty() ? 0u : parts.front().size();
             if (mercuryStatus == 200 && !parts.empty()) {
@@ -2630,10 +4263,23 @@ bool SpotifySessionProbe::runOneSession(bool reconnecting) {
                 for (const auto& candidate : metadata.audioFiles) addAudioKeyCandidate(candidate);
 
                 if (audioKeyCandidateCount_ != 0u) {
-                  if (!sendAudioKeyCandidate(0u)) {
-                    tcp.stop(); state_ = State::Failed; return false;
+                  if (mediaKeyServiceBlocked_) {
+                    ++mediaKeySuppressedTracks_;
+                    audioKeyCandidateIndex_ = 0u;
+                    memcpy(selectedAudioFileId_, audioKeyCandidateFileIds_[0], AUDIO_FILE_ID_BYTES);
+                    setError("Spotify media key service-blocked; RequestKey suppressed");
+                    if (!sendSpircBlockedNotify()) {
+                      tcp.stop(); state_ = State::Failed; return false;
+                    }
+                    if (!startApStreamCanary()) {
+                      tcp.stop(); state_ = State::Failed; return false;
+                    }
+                  } else {
+                    if (!sendAudioKeyCandidate(0u)) {
+                      tcp.stop(); state_ = State::Failed; return false;
+                    }
+                    setError("none");
                   }
-                  setError("none");
                 } else {
                   ++audioKeyErrors_;
                   ++audioKeyProtocolErrors_;

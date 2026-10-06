@@ -5,15 +5,25 @@
 #include <freertos/task.h>
 #include <vector>
 
-// dev.2l-r1 bounded AP StreamChunk canary.
+// dev.2m-r14 conservative AP receive-poll optimization above the hardware-qualified r12
+// canonical classic-queue identity gate and r13 timing evidence. r14 does not alter selection semantics:
+// GID-only TrackRefs remain canonicalized to spotify:track URIs and context
+// track_index remains advisory. It only measures local context resolution/apply
+// time and metadata round-trip latency so the observed ~1 s UI delay can be
+// localized before any scheduling/polling change.
+// r7 keeps the r5/r6 playback semantics, but stops advertising kSupportsPlaylistV2
+// because this usermod does not implement Spotify's full playlist-v2 command/state
+// contract. Frame.context_player_state is classified as either legacy JSON or the
+// current binary ContextPlayerState protobuf and only bounded selection fields are
+// decoded. The virtual position clock remains active while audio is silent.
 //
-// Qualified dev.2i-r2 metadata/audio-key behavior is retained unchanged. dev.2j-r2
-// proved that ProductInfo carries head-files=0 for this account, and dev.2k-r1
-// proved on the real WLED target that the prebuilt framework lacks the mbedTLS TLS
-// engine required by esp_http_client/esp-tls. dev.2l therefore tests the historical
-// AP media channel already available inside the authenticated Shannon session. It
-// requests only 4 KiB of the preferred encrypted AudioFile and discards data after
-// counting it. No AES decrypt, decoder, CDN, Login5 or alternate TLS stack is added.
+// dev.2l-r2 qualified repeated encrypted media reads over the authenticated AP/Shannon
+// channel. The remaining blocker is the media AES key: the current account returns
+// correlated AesKeyError 0:1 for every candidate, independently reproduced by current
+// librespot. dev.2m performs one bounded candidate scan per manually started session;
+// if every candidate is rejected with 0:1 it latches a session-local service-block
+// state, suppresses redundant RequestKey scans for later tracks/reconnects, and keeps
+// metadata/SPIRC/AP-stream diagnostics alive. No decrypt, decoder or PCM feed is added.
 class SpotifySessionProbe {
 public:
   enum class State : uint8_t {
@@ -121,6 +131,64 @@ public:
   uint32_t spircLoadFrames() const { return spircLoadFrames_; }
   uint32_t spircPlayFrames() const { return spircPlayFrames_; }
   uint32_t spircPauseFrames() const { return spircPauseFrames_; }
+  uint32_t spircPlayPauseFrames() const { return spircPlayPauseFrames_; }
+  uint32_t spircSeekFrames() const { return spircSeekFrames_; }
+  uint32_t spircPrevFrames() const { return spircPrevFrames_; }
+  uint32_t spircNextFrames() const { return spircNextFrames_; }
+  uint32_t spircPlaySelectFrames() const { return spircPlaySelectFrames_; }
+  uint32_t spircPlaySelectByIndex() const { return spircPlaySelectByIndex_; }
+  uint32_t spircReplaceFrames() const { return spircReplaceFrames_; }
+  uint32_t spircContextPlayerFrames() const { return spircContextPlayerFrames_; }
+  size_t spircContextPlayerBytes() const { return spircContextPlayerBytes_; }
+  uint32_t spircContextPlayerPlay() const { return spircContextPlayerPlay_; }
+  uint32_t spircContextPlayerSelect() const { return spircContextPlayerSelect_; }
+  uint32_t spircContextPlayerByUid() const { return spircContextPlayerByUid_; }
+  uint32_t spircContextPlayerByUri() const { return spircContextPlayerByUri_; }
+  uint32_t spircContextPlayerByIndex() const { return spircContextPlayerByIndex_; }
+  uint32_t spircContextPlayerByScan() const { return spircContextPlayerByScan_; }
+  uint32_t spircContextPlayerByInflate() const { return spircContextPlayerByInflate_; }
+  uint32_t spircContextPlayerBySkipScan() const { return spircContextPlayerBySkipScan_; }
+  uint32_t spircContextPlayerUnresolved() const { return spircContextPlayerUnresolved_; }
+  uint32_t spircContextInflateAttempts() const { return spircContextInflateAttempts_; }
+  uint32_t spircContextInflateOk() const { return spircContextInflateOk_; }
+  uint32_t spircContextInflateFailures() const { return spircContextInflateFailures_; }
+  size_t spircContextInflateBytes() const { return spircContextInflateBytes_; }
+  uint32_t spircContextInflatePrintablePct() const { return spircContextInflatePrintablePct_; }
+  uint32_t spircContextSkipObjects() const { return spircContextSkipObjects_; }
+  uint32_t spircContextSkipUidCandidates() const { return spircContextSkipUidCandidates_; }
+  uint32_t spircContextSkipUriCandidates() const { return spircContextSkipUriCandidates_; }
+  uint32_t spircContextSkipIndexCandidates() const { return spircContextSkipIndexCandidates_; }
+  uint32_t spircContextSkipUidResolved() const { return spircContextSkipUidResolved_; }
+  uint32_t spircContextSkipQueueResolved() const { return spircContextSkipQueueResolved_; }
+  uint32_t spircContextSkipIndexValidated() const { return spircContextSkipIndexValidated_; }
+  uint32_t spircContextSkipIndexIgnored() const { return spircContextSkipIndexIgnored_; }
+  uint32_t spircContextQueueRefs() const { return spircContextQueueRefs_; }
+  uint32_t spircContextQueueGidOnly() const { return spircContextQueueGidOnly_; }
+  uint32_t spircContextQueueNativeUri() const { return spircContextQueueNativeUri_; }
+  uint32_t spircContextQueueCanonical() const { return spircContextQueueCanonical_; }
+  uint32_t spircContextSkipAmbiguous() const { return spircContextSkipAmbiguous_; }
+  int32_t spircContextSkipUniqueIndex() const { return spircContextSkipUniqueIndex_; }
+  uint32_t spircContextResolveLastUs() const { return spircContextResolveLastUs_; }
+  uint32_t spircContextResolveMaxUs() const { return spircContextResolveMaxUs_; }
+  uint32_t spircSelectionApplyLastUs() const { return spircSelectionApplyLastUs_; }
+  uint32_t spircSelectionApplyMaxUs() const { return spircSelectionApplyMaxUs_; }
+  size_t spircContextPlayerLastBytes() const { return spircContextPlayerLastBytes_; }
+  uint32_t spircContextPlayerLastHash() const { return spircContextPlayerLastHash_; }
+  uint32_t spircContextPlayerPrintablePct() const { return spircContextPlayerPrintablePct_; }
+  bool spircContextPlayerProtoValid() const { return spircContextPlayerProtoValid_; }
+  uint32_t spircContextPlayerProtoFields() const { return spircContextPlayerProtoFields_; }
+  uint32_t spircContextPlayerProtoLengthFields() const { return spircContextPlayerProtoLengthFields_; }
+  uint32_t spircContextPlayerQueueMatches() const { return spircContextPlayerQueueMatches_; }
+  uint32_t spircContextPlayerNonCurrentMatches() const { return spircContextPlayerNonCurrentMatches_; }
+  int32_t spircContextPlayerUniqueIndex() const { return spircContextPlayerUniqueIndex_; }
+  uint32_t spircDuplicateLoadsWithUnknownContext() const { return spircDuplicateLoadsWithUnknownContext_; }
+  const char* spircContextPlayerEndpoint() const { return spircContextPlayerEndpoint_; }
+  const char* spircContextPlayerEncoding() const { return spircContextPlayerEncoding_; }
+  const char* spircContextPlayerPrefix() const { return spircContextPlayerPrefix_; }
+  const char* spircContextPlayerMagic() const { return spircContextPlayerMagic_; }
+  const char* spircContextPlayerProtoMap() const { return spircContextPlayerProtoMap_; }
+  const char* spircContextInflateStatus() const { return spircContextInflateStatus_; }
+  const char* spircContextInflateEncoding() const { return spircContextInflateEncoding_; }
   uint32_t spircLastType() const { return spircLastType_; }
   bool spircRemoteActive() const { return spircRemoteActive_; }
   bool spircLocalActive() const { return spircLocalActive_; }
@@ -128,9 +196,27 @@ public:
   uint32_t spircTransferNotifySent() const { return spircTransferNotifySent_; }
   uint32_t spircTransferNotifyAcks() const { return spircTransferNotifyAcks_; }
   size_t spircTransferNotifyBytes() const { return spircTransferNotifyBytes_; }
+  uint32_t spircBlockedNotifyAttempts() const { return spircBlockedNotifyAttempts_; }
+  uint32_t spircBlockedNotifySent() const { return spircBlockedNotifySent_; }
+  uint32_t spircBlockedNotifyAcks() const { return spircBlockedNotifyAcks_; }
+  size_t spircBlockedNotifyBytes() const { return spircBlockedNotifyBytes_; }
+  uint32_t spircEmptyLoadsIgnored() const { return spircEmptyLoadsIgnored_; }
+  uint32_t spircDuplicateLoadsIgnored() const { return spircDuplicateLoadsIgnored_; }
+  uint32_t spircDuplicateLoadsAcked() const { return spircDuplicateLoadsAcked_; }
+  uint32_t spircRecipientIgnored() const { return spircRecipientIgnored_; }
+  uint32_t spircCommandAcksSent() const { return spircCommandAcksSent_; }
+  uint32_t spircControlNotifySent() const { return spircControlNotifySent_; }
+  uint32_t spircControlNotifyAcks() const { return spircControlNotifyAcks_; }
+  size_t spircControlNotifyBytes() const { return spircControlNotifyBytes_; }
+  size_t spircStateTrackRefCount() const { return spircStateTrackRefs_.size(); }
+  size_t spircStateTrackRefBytes() const { return spircStateTrackRefBytes_; }
+  uint32_t spircStateTrackRefsTruncated() const { return spircStateTrackRefsTruncated_; }
+  uint32_t spircStateFallbackTrackRefs() const { return spircStateFallbackTrackRefs_; }
   uint32_t spircLastLoadTrackCount() const { return spircLastLoadTrackCount_; }
   uint32_t spircLastLoadPositionMs() const { return spircLastLoadPositionMs_; }
   uint32_t spircLastLoadStatus() const { return spircLastLoadStatus_; }
+  bool spircPlaybackClockRunning() const { return spircPlaybackClockRunning_; }
+  uint32_t spircPlaybackClockBasePositionMs() const { return spircPlaybackClockBasePositionMs_; }
   const char* spircLastLoadContext() const { return spircLastLoadContext_; }
   const char* spircRemoteIdent() const { return spircRemoteIdent_; }
   const char* spircRemoteName() const { return spircRemoteName_; }
@@ -144,6 +230,8 @@ public:
   uint32_t metadataParseFailures() const { return metadataParseFailures_; }
   int32_t metadataLastStatus() const { return metadataLastStatus_; }
   size_t metadataLastBytes() const { return metadataLastBytes_; }
+  uint32_t metadataLastRoundTripMs() const { return metadataLastRoundTripMs_; }
+  uint32_t metadataMaxRoundTripMs() const { return metadataMaxRoundTripMs_; }
   const char* metadataTitle() const { return metadataTitle_; }
   const char* metadataArtists() const { return metadataArtists_; }
   const char* metadataAlbum() const { return metadataAlbum_; }
@@ -194,6 +282,18 @@ public:
   bool audioKeyCandidateTimedOutAt(uint8_t index) const {
     return index < audioKeyCandidateCount_ && audioKeyCandidateTimedOut_[index];
   }
+  const char* mediaKeyStateName() const {
+    if (audioKeyBytes_ == 16u) return "ready";
+    if (mediaKeyServiceBlocked_) return "service-blocked";
+    if (audioKeyPending_) return "requesting";
+    if (audioKeyCandidateCount_ != 0u) return "diagnostic";
+    return "idle";
+  }
+  bool mediaKeyServiceBlocked() const { return mediaKeyServiceBlocked_; }
+  uint32_t mediaKeyBlockEvents() const { return mediaKeyBlockEvents_; }
+  uint32_t mediaKeySuppressedTracks() const { return mediaKeySuppressedTracks_; }
+  uint8_t mediaKeyBlockError0() const { return mediaKeyBlockError0_; }
+  uint8_t mediaKeyBlockError1() const { return mediaKeyBlockError1_; }
 
   uint32_t productInfoPackets() const { return productInfoPackets_; }
   size_t productInfoBytes() const { return productInfoBytes_; }
@@ -222,11 +322,16 @@ public:
   uint32_t apStreamTimeouts() const { return apStreamTimeouts_; }
   uint32_t apStreamProtocolErrors() const { return apStreamProtocolErrors_; }
   uint32_t apStreamStalePackets() const { return apStreamStalePackets_; }
+  uint32_t apStreamPostCompletePackets() const { return apStreamPostCompletePackets_; }
   uint32_t apStreamTrackChangeCancels() const { return apStreamTrackChangeCancels_; }
   bool apStreamPending() const { return apStreamPending_; }
   uint16_t apStreamChannelId() const { return apStreamChannelId_; }
   size_t apStreamRequestBytes() const { return apStreamRequestBytes_; }
   uint32_t apStreamRequestedBytes() const { return AP_STREAM_CANARY_BYTES; }
+  uint32_t apStreamTotalRequestedBytes() const { return AP_STREAM_CANARY_BYTES * AP_STREAM_PROBE_COUNT; }
+  uint8_t apStreamProbeCount() const { return AP_STREAM_PROBE_COUNT; }
+  uint8_t apStreamCompletedProbes() const { return apStreamCompletedProbes_; }
+  uint32_t apStreamCurrentOffsetBytes() const { return static_cast<uint32_t>(apStreamProbeIndex_) * AP_STREAM_CANARY_BYTES; }
   uint32_t apStreamResponsePackets() const { return apStreamResponsePackets_; }
   uint8_t apStreamLastCommand() const { return apStreamLastCommand_; }
   uint16_t apStreamFailureCode() const { return apStreamFailureCode_; }
@@ -252,7 +357,7 @@ private:
   static constexpr uint32_t AUTO_DELAY_MS = 3500u;
   static constexpr uint32_t CONNECT_TIMEOUT_MS = 5000u;
   static constexpr uint32_t IO_TIMEOUT_MS = 7000u;
-  static constexpr uint32_t SESSION_POLL_MS = 250u;
+  static constexpr uint32_t SESSION_POLL_MS = 50u;
   static constexpr uint32_t SESSION_RX_TIMEOUT_MS = 130000u;
   static constexpr uint32_t RECONNECT_DELAY_MS = 2500u;
   static constexpr uint32_t AUDIO_KEY_TIMEOUT_MS = 2500u;
@@ -260,6 +365,7 @@ private:
   static constexpr size_t MEDIA_HEAD_MAX_BYTES = 4096u;
   static constexpr uint32_t MEDIA_HEAD_TIMEOUT_MS = 5000u;
   static constexpr size_t AP_STREAM_CANARY_BYTES = 4096u;
+  static constexpr uint8_t AP_STREAM_PROBE_COUNT = 3u;
   static constexpr uint32_t AP_STREAM_WORD_BYTES = 4u;
   static constexpr uint32_t AP_STREAM_CANARY_WORDS = AP_STREAM_CANARY_BYTES / AP_STREAM_WORD_BYTES;
   static constexpr uint32_t AP_STREAM_TIMEOUT_MS = 5000u;
@@ -363,6 +469,64 @@ private:
   uint32_t spircLoadFrames_ = 0u;
   uint32_t spircPlayFrames_ = 0u;
   uint32_t spircPauseFrames_ = 0u;
+  uint32_t spircPlayPauseFrames_ = 0u;
+  uint32_t spircSeekFrames_ = 0u;
+  uint32_t spircPrevFrames_ = 0u;
+  uint32_t spircNextFrames_ = 0u;
+  uint32_t spircPlaySelectFrames_ = 0u;
+  uint32_t spircPlaySelectByIndex_ = 0u;
+  uint32_t spircReplaceFrames_ = 0u;
+  uint32_t spircContextPlayerFrames_ = 0u;
+  size_t spircContextPlayerBytes_ = 0u;
+  uint32_t spircContextPlayerPlay_ = 0u;
+  uint32_t spircContextPlayerSelect_ = 0u;
+  uint32_t spircContextPlayerByUid_ = 0u;
+  uint32_t spircContextPlayerByUri_ = 0u;
+  uint32_t spircContextPlayerByIndex_ = 0u;
+  uint32_t spircContextPlayerByScan_ = 0u;
+  uint32_t spircContextPlayerByInflate_ = 0u;
+  uint32_t spircContextPlayerBySkipScan_ = 0u;
+  uint32_t spircContextPlayerUnresolved_ = 0u;
+  uint32_t spircContextInflateAttempts_ = 0u;
+  uint32_t spircContextInflateOk_ = 0u;
+  uint32_t spircContextInflateFailures_ = 0u;
+  size_t spircContextInflateBytes_ = 0u;
+  uint32_t spircContextInflatePrintablePct_ = 0u;
+  uint32_t spircContextSkipObjects_ = 0u;
+  uint32_t spircContextSkipUidCandidates_ = 0u;
+  uint32_t spircContextSkipUriCandidates_ = 0u;
+  uint32_t spircContextSkipIndexCandidates_ = 0u;
+  uint32_t spircContextSkipUidResolved_ = 0u;
+  uint32_t spircContextSkipQueueResolved_ = 0u;
+  uint32_t spircContextSkipIndexValidated_ = 0u;
+  uint32_t spircContextSkipIndexIgnored_ = 0u;
+  uint32_t spircContextQueueRefs_ = 0u;
+  uint32_t spircContextQueueGidOnly_ = 0u;
+  uint32_t spircContextQueueNativeUri_ = 0u;
+  uint32_t spircContextQueueCanonical_ = 0u;
+  uint32_t spircContextSkipAmbiguous_ = 0u;
+  int32_t spircContextSkipUniqueIndex_ = -1;
+  uint32_t spircContextResolveLastUs_ = 0u;
+  uint32_t spircContextResolveMaxUs_ = 0u;
+  uint32_t spircSelectionApplyLastUs_ = 0u;
+  uint32_t spircSelectionApplyMaxUs_ = 0u;
+  size_t spircContextPlayerLastBytes_ = 0u;
+  uint32_t spircContextPlayerLastHash_ = 0u;
+  uint32_t spircContextPlayerPrintablePct_ = 0u;
+  bool spircContextPlayerProtoValid_ = false;
+  uint32_t spircContextPlayerProtoFields_ = 0u;
+  uint32_t spircContextPlayerProtoLengthFields_ = 0u;
+  uint32_t spircContextPlayerQueueMatches_ = 0u;
+  uint32_t spircContextPlayerNonCurrentMatches_ = 0u;
+  int32_t spircContextPlayerUniqueIndex_ = -1;
+  uint32_t spircDuplicateLoadsWithUnknownContext_ = 0u;
+  char spircContextPlayerEndpoint_[24] = {0};
+  char spircContextPlayerEncoding_[12] = {0};
+  char spircContextPlayerPrefix_[33] = {0};
+  char spircContextPlayerMagic_[12] = {0};
+  char spircContextPlayerProtoMap_[80] = {0};
+  char spircContextInflateStatus_[24] = {0};
+  char spircContextInflateEncoding_[12] = {0};
   uint32_t spircLastType_ = 0u;
   bool spircRemoteActive_ = false;
   bool spircLocalActive_ = false;
@@ -371,9 +535,37 @@ private:
   uint32_t spircTransferNotifySent_ = 0u;
   uint32_t spircTransferNotifyAcks_ = 0u;
   size_t spircTransferNotifyBytes_ = 0u;
+  uint64_t spircBlockedNotifyMercurySequence_ = ~static_cast<uint64_t>(0);
+  uint32_t spircBlockedNotifyAttempts_ = 0u;
+  uint32_t spircBlockedNotifySent_ = 0u;
+  uint32_t spircBlockedNotifyAcks_ = 0u;
+  size_t spircBlockedNotifyBytes_ = 0u;
+  uint32_t spircEmptyLoadsIgnored_ = 0u;
+  uint32_t spircDuplicateLoadsIgnored_ = 0u;
+  uint32_t spircDuplicateLoadsAcked_ = 0u;
+  uint32_t spircRecipientIgnored_ = 0u;
+  uint32_t spircCommandAcksSent_ = 0u;
+  uint64_t spircControlNotifyMercurySequence_ = ~static_cast<uint64_t>(0);
+  uint32_t spircControlNotifySent_ = 0u;
+  uint32_t spircControlNotifyAcks_ = 0u;
+  size_t spircControlNotifyBytes_ = 0u;
+  char spircLastCommandIdent_[48] = {0};
+  uint32_t spircLastCommandMsgid_ = 0u;
+  bool spircHaveCommandAck_ = false;
+  std::vector<std::vector<uint8_t>> spircStateTrackRefs_;
+  size_t spircStateTrackRefBytes_ = 0u;
+  uint32_t spircStateTrackRefsTruncated_ = 0u;
+  uint32_t spircStateFallbackTrackRefs_ = 0u;
+  bool spircStateShuffle_ = false;
+  bool spircStateHasShuffle_ = false;
+  bool spircStateRepeat_ = false;
+  bool spircStateHasRepeat_ = false;
   uint32_t spircLastLoadTrackCount_ = 0u;
   uint32_t spircLastLoadPositionMs_ = 0u;
   uint32_t spircLastLoadStatus_ = 0u;
+  bool spircPlaybackClockRunning_ = false;
+  uint32_t spircPlaybackClockBasePositionMs_ = 0u;
+  uint32_t spircPlaybackClockStartedAtMs_ = 0u;
   char spircLastLoadContext_[96] = {0};
   char spircRemoteIdent_[48] = {0};
   char spircRemoteName_[33] = {0};
@@ -388,6 +580,9 @@ private:
   uint32_t metadataParseFailures_ = 0u;
   int32_t metadataLastStatus_ = 0;
   size_t metadataLastBytes_ = 0u;
+  uint32_t metadataRequestedAtMs_ = 0u;
+  uint32_t metadataLastRoundTripMs_ = 0u;
+  uint32_t metadataMaxRoundTripMs_ = 0u;
   char metadataTitle_[96] = {0};
   char metadataArtists_[128] = {0};
   char metadataAlbum_[96] = {0};
@@ -430,6 +625,11 @@ private:
   uint8_t audioKeyError0_ = 0u;
   uint8_t audioKeyError1_ = 0u;
   bool audioKeyPending_ = false;
+  bool mediaKeyServiceBlocked_ = false;
+  uint32_t mediaKeyBlockEvents_ = 0u;
+  uint32_t mediaKeySuppressedTracks_ = 0u;
+  uint8_t mediaKeyBlockError0_ = 0u;
+  uint8_t mediaKeyBlockError1_ = 0u;
 
   uint32_t productInfoPackets_ = 0u;
   size_t productInfoBytes_ = 0u;
@@ -459,9 +659,13 @@ private:
   uint32_t apStreamTimeouts_ = 0u;
   uint32_t apStreamProtocolErrors_ = 0u;
   uint32_t apStreamStalePackets_ = 0u;
+  uint32_t apStreamPostCompletePackets_ = 0u;
   uint32_t apStreamTrackChangeCancels_ = 0u;
   uint16_t apStreamNextChannelId_ = 0u;
   uint16_t apStreamChannelId_ = 0u;
+  uint16_t apStreamLastCompletedChannelId_ = 0xffffu;
+  uint8_t apStreamProbeIndex_ = 0u;
+  uint8_t apStreamCompletedProbes_ = 0u;
   uint32_t apStreamRequestedAtMs_ = 0u;
   size_t apStreamRequestBytes_ = 0u;
   uint32_t apStreamResponsePackets_ = 0u;
@@ -472,6 +676,7 @@ private:
   uint32_t apStreamReportedFileBytes_ = 0u;
   uint32_t apStreamDataPackets_ = 0u;
   size_t apStreamDataBytes_ = 0u;
+  size_t apStreamCurrentDataBytes_ = 0u;
   int32_t apStreamCandidateFormat_ = -1;
   bool apStreamHeadersComplete_ = false;
   bool apStreamPending_ = false;

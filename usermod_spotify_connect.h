@@ -9,8 +9,8 @@
 
 class UsermodSpotifyConnect : public Usermod {
 private:
-  static constexpr const char* USERMOD_VERSION = "0.1.0-dev.2l-ap-stream";
-  static constexpr const char* USERMOD_REVISION = "r1";
+  static constexpr const char* USERMOD_VERSION = "0.1.0-dev.2m-key-block";
+  static constexpr const char* USERMOD_REVISION = "r14";
   bool enabled_ = false;
   bool ready_ = false;
   bool initPending_ = false;
@@ -81,7 +81,7 @@ public:
           request->send(409, FPSTR(CONTENT_TYPE_PLAIN), String(F("Spotify session not started: state=")) + sessionProbe_.stateName() + F(" error=") + sessionProbe_.lastError());
           return;
         }
-        request->send(202, FPSTR(CONTENT_TYPE_PLAIN), F("Spotify AP/Mercury/SPIRC/media-head session started; inspect /json/info"));
+        request->send(202, FPSTR(CONTENT_TYPE_PLAIN), F("Spotify AP/Mercury/SPIRC/media-key session started; inspect /json/info"));
         return;
       }
       if (action == "stop") {
@@ -159,7 +159,7 @@ public:
     if (!enabled_) s.add(F("disabled"));
     else if (!ready_ && selectClockMode() == ClockMode::WaitingSharedClock) s.add(F("waiting: AudioReactive owns clocks but LRCK inactive"));
     else if (!ready_) s.add(String(F("audio not ready: "))+audio_.lastError());
-    else s.add(F("audio ready | Spotify AP stream gate"));
+    else s.add(F("audio ready | Spotify media-key hardening gate"));
 
     JsonArray z=user.createNestedArray(F("Spotify Zeroconf"));
     z.add(String(F("state=")) + zeroConf_.stateName() + F(" | cpath=") + zeroConf_.cpath());
@@ -218,12 +218,83 @@ public:
     n.add(String(F("SPIRC rx=")) + sessionProbe_.spircRxFrames() + F(" remote=") + sessionProbe_.spircRemoteFrames() +
           F(" selfEcho=") + sessionProbe_.spircSelfEchoes() + F(" notify=") + sessionProbe_.spircNotifyFrames() +
           F(" load=") + sessionProbe_.spircLoadFrames() + F(" play=") + sessionProbe_.spircPlayFrames() +
-          F(" pause=") + sessionProbe_.spircPauseFrames() + F(" lastType=0x") + String(sessionProbe_.spircLastType(), HEX) +
+          F(" pause=") + sessionProbe_.spircPauseFrames() + F(" playPause=") + sessionProbe_.spircPlayPauseFrames() +
+          F(" seek=") + sessionProbe_.spircSeekFrames() + F(" prev=") + sessionProbe_.spircPrevFrames() +
+          F(" next=") + sessionProbe_.spircNextFrames() + F(" replace=") + sessionProbe_.spircReplaceFrames() +
+          F(" playSelect=") + sessionProbe_.spircPlaySelectFrames() +
+          F(" byIndex=") + sessionProbe_.spircPlaySelectByIndex() + F(" lastType=0x") + String(sessionProbe_.spircLastType(), HEX) +
           F(" active=") + (sessionProbe_.spircRemoteActive() ? F("yes") : F("no")));
     n.add(String(F("SPIRC transfer Notify attempts=")) + sessionProbe_.spircTransferNotifyAttempts() +
           F(" sent=") + sessionProbe_.spircTransferNotifySent() + F(" ack=") + sessionProbe_.spircTransferNotifyAcks() +
           F(" bytes=") + sessionProbe_.spircTransferNotifyBytes() + F(" localActive=") +
           (sessionProbe_.spircLocalActive() ? F("yes") : F("no")));
+    n.add(String(F("SPIRC blocked Notify attempts=")) + sessionProbe_.spircBlockedNotifyAttempts() +
+          F(" sent=") + sessionProbe_.spircBlockedNotifySent() + F(" ack=") + sessionProbe_.spircBlockedNotifyAcks() +
+          F(" bytes=") + sessionProbe_.spircBlockedNotifyBytes() + F(" emptyLoadIgnored=") +
+          sessionProbe_.spircEmptyLoadsIgnored() + F(" duplicateLoadIgnored=") +
+          sessionProbe_.spircDuplicateLoadsIgnored() + F(" duplicateLoadAcked=") +
+          sessionProbe_.spircDuplicateLoadsAcked() + F(" duplicateCpsUnknown=") +
+          sessionProbe_.spircDuplicateLoadsWithUnknownContext());
+    n.add(String(F("SPIRC control Notify sent=")) + sessionProbe_.spircControlNotifySent() +
+          F(" ack=") + sessionProbe_.spircControlNotifyAcks() + F(" bytes=") +
+          sessionProbe_.spircControlNotifyBytes() + F(" commandAcks=") + sessionProbe_.spircCommandAcksSent() +
+          F(" recipientIgnored=") + sessionProbe_.spircRecipientIgnored());
+    n.add(String(F("SPIRC contextPlayer frames=")) + sessionProbe_.spircContextPlayerFrames() +
+          F(" bytes=") + sessionProbe_.spircContextPlayerBytes() + F(" encoding=") +
+          (sessionProbe_.spircContextPlayerEncoding()[0] ? sessionProbe_.spircContextPlayerEncoding() : "none") +
+          F(" endpoint=") +
+          (sessionProbe_.spircContextPlayerEndpoint()[0] ? sessionProbe_.spircContextPlayerEndpoint() : "none") +
+          F(" play=") + sessionProbe_.spircContextPlayerPlay() + F(" select=") +
+          sessionProbe_.spircContextPlayerSelect() + F(" byUid=") + sessionProbe_.spircContextPlayerByUid() +
+          F(" byUri=") + sessionProbe_.spircContextPlayerByUri() + F(" byIndex=") +
+          sessionProbe_.spircContextPlayerByIndex() + F(" byScan=") + sessionProbe_.spircContextPlayerByScan() +
+          F(" byInflate=") + sessionProbe_.spircContextPlayerByInflate() + F(" bySkip=") +
+          sessionProbe_.spircContextPlayerBySkipScan() + F(" unresolved=") +
+          sessionProbe_.spircContextPlayerUnresolved());
+    n.add(String(F("SPIRC contextDiag lastBytes=")) + sessionProbe_.spircContextPlayerLastBytes() +
+          F(" hash=0x") + String(sessionProbe_.spircContextPlayerLastHash(), HEX) + F(" prefix=") +
+          (sessionProbe_.spircContextPlayerPrefix()[0] ? sessionProbe_.spircContextPlayerPrefix() : "none") +
+          F(" magic=") + (sessionProbe_.spircContextPlayerMagic()[0] ? sessionProbe_.spircContextPlayerMagic() : "none") +
+          F(" printable=") + sessionProbe_.spircContextPlayerPrintablePct() + F("% proto=") +
+          (sessionProbe_.spircContextPlayerProtoValid() ? F("yes") : F("no")) + F(" fields=") +
+          sessionProbe_.spircContextPlayerProtoFields() + F(" lenFields=") +
+          sessionProbe_.spircContextPlayerProtoLengthFields() + F(" map=") +
+          (sessionProbe_.spircContextPlayerProtoMap()[0] ? sessionProbe_.spircContextPlayerProtoMap() : "none"));
+    n.add(String(F("SPIRC contextScan queueMatches=")) + sessionProbe_.spircContextPlayerQueueMatches() +
+          F(" nonCurrent=") + sessionProbe_.spircContextPlayerNonCurrentMatches() + F(" uniqueIndex=") +
+          sessionProbe_.spircContextPlayerUniqueIndex());
+    n.add(String(F("SPIRC contextQueue refs=")) + sessionProbe_.spircContextQueueRefs() +
+          F(" gidOnly=") + sessionProbe_.spircContextQueueGidOnly() + F(" nativeUri=") +
+          sessionProbe_.spircContextQueueNativeUri() + F(" canonical=") +
+          sessionProbe_.spircContextQueueCanonical());
+    n.add(String(F("SPIRC contextSkip objects=")) + sessionProbe_.spircContextSkipObjects() +
+          F(" uid=") + sessionProbe_.spircContextSkipUidCandidates() + F(" uri=") +
+          sessionProbe_.spircContextSkipUriCandidates() + F(" index=") +
+          sessionProbe_.spircContextSkipIndexCandidates() + F(" uidResolved=") +
+          sessionProbe_.spircContextSkipUidResolved() + F(" queueResolved=") +
+          sessionProbe_.spircContextSkipQueueResolved() + F(" indexValidated=") +
+          sessionProbe_.spircContextSkipIndexValidated() + F(" indexIgnored=") +
+          sessionProbe_.spircContextSkipIndexIgnored() + F(" uniqueIndex=") +
+          sessionProbe_.spircContextSkipUniqueIndex() + F(" ambiguous=") +
+          sessionProbe_.spircContextSkipAmbiguous());
+    n.add(String(F("SPIRC timing resolveLast=")) + sessionProbe_.spircContextResolveLastUs() +
+          F("us resolveMax=") + sessionProbe_.spircContextResolveMaxUs() + F("us applyLast=") +
+          sessionProbe_.spircSelectionApplyLastUs() + F("us applyMax=") +
+          sessionProbe_.spircSelectionApplyMaxUs() + F("us poll=50ms"));
+    n.add(String(F("SPIRC contextInflate attempts=")) + sessionProbe_.spircContextInflateAttempts() +
+          F(" ok=") + sessionProbe_.spircContextInflateOk() + F(" failures=") +
+          sessionProbe_.spircContextInflateFailures() + F(" status=") +
+          (sessionProbe_.spircContextInflateStatus()[0] ? sessionProbe_.spircContextInflateStatus() : "none") +
+          F(" bytes=") + sessionProbe_.spircContextInflateBytes() + F(" printable=") +
+          sessionProbe_.spircContextInflatePrintablePct() + F("% encoding=") +
+          (sessionProbe_.spircContextInflateEncoding()[0] ? sessionProbe_.spircContextInflateEncoding() : "none"));
+    n.add(String(F("SPIRC playback status=")) + sessionProbe_.spircLastLoadStatus() + F(" clock=") +
+          (sessionProbe_.spircPlaybackClockRunning() ? F("running") : F("held")) + F(" basePos=") +
+          sessionProbe_.spircPlaybackClockBasePositionMs());
+    n.add(String(F("SPIRC state tracks=")) + sessionProbe_.spircStateTrackRefCount() +
+          F(" trackBytes=") + sessionProbe_.spircStateTrackRefBytes() + F(" truncated=") +
+          sessionProbe_.spircStateTrackRefsTruncated() + F(" fallbackRefs=") +
+          sessionProbe_.spircStateFallbackTrackRefs());
     n.add(String(F("SPIRC Load tracks=")) + sessionProbe_.spircLastLoadTrackCount() +
           F(" position=") + sessionProbe_.spircLastLoadPositionMs() + F(" remoteStatus=") +
           sessionProbe_.spircLastLoadStatus() + F(" context=") +
@@ -234,7 +305,9 @@ public:
     n.add(String(F("Metadata GET attempts=")) + sessionProbe_.metadataRequests() + F(" responses=") +
           sessionProbe_.metadataResponses() + F(" ok=") + sessionProbe_.metadataSuccesses() +
           F(" parseFail=") + sessionProbe_.metadataParseFailures() + F(" status=") +
-          sessionProbe_.metadataLastStatus() + F(" bytes=") + sessionProbe_.metadataLastBytes());
+          sessionProbe_.metadataLastStatus() + F(" bytes=") + sessionProbe_.metadataLastBytes() +
+          F(" rtt=") + sessionProbe_.metadataLastRoundTripMs() + F("ms maxRtt=") +
+          sessionProbe_.metadataMaxRoundTripMs() + F("ms"));
     n.add(String(F("Track title=")) + (sessionProbe_.metadataTitle()[0] ? sessionProbe_.metadataTitle() : "none") +
           F(" artist=") + (sessionProbe_.metadataArtists()[0] ? sessionProbe_.metadataArtists() : "none"));
     n.add(String(F("Track album=")) + (sessionProbe_.metadataAlbum()[0] ? sessionProbe_.metadataAlbum() : "none") +
@@ -259,7 +332,9 @@ public:
           (sessionProbe_.audioKeyCandidateCount() ? sessionProbe_.audioKeyCandidateIndex() + 1u : 0u) + F("/") +
           sessionProbe_.audioKeyCandidateCount() + F(" format=") + sessionProbe_.audioKeyCandidateFormat() +
           F(" advances=") + sessionProbe_.audioKeyCandidateAdvances() + F(" truncated=") +
-          sessionProbe_.audioKeyCandidateTruncated());
+          sessionProbe_.audioKeyCandidateTruncated() + F(" scan=") +
+          (sessionProbe_.mediaKeyServiceBlocked() && sessionProbe_.mediaKeySuppressedTracks() > 0u
+               ? F("suppressed") : F("active")));
     String candidateTrace(F("AudioKey candidates"));
     for (uint8_t i = 0u; i < sessionProbe_.audioKeyCandidateCount(); ++i) {
       candidateTrace += F(" [");
@@ -282,6 +357,10 @@ public:
       candidateTrace += F("]");
     }
     n.add(candidateTrace);
+    n.add(String(F("MediaKey state=")) + sessionProbe_.mediaKeyStateName() + F(" blocked=") +
+          (sessionProbe_.mediaKeyServiceBlocked() ? F("yes") : F("no")) + F(" blockEvents=") +
+          sessionProbe_.mediaKeyBlockEvents() + F(" suppressedTracks=") + sessionProbe_.mediaKeySuppressedTracks() +
+          F(" blockErr=") + sessionProbe_.mediaKeyBlockError0() + F(":") + sessionProbe_.mediaKeyBlockError1());
     n.add(String(F("ProductInfo packets=")) + sessionProbe_.productInfoPackets() + F(" bytes=") +
           sessionProbe_.productInfoBytes() + F(" hash=0x") + String(sessionProbe_.productInfoHash(), HEX) +
           F(" xml=") + (sessionProbe_.productInfoXmlLike() ? F("yes") : F("no")) + F(" headUrl=") +
@@ -302,11 +381,15 @@ public:
           sessionProbe_.apStreamSuccesses() + F(" failures=") + sessionProbe_.apStreamFailures() +
           F(" timeouts=") + sessionProbe_.apStreamTimeouts() + F(" protoErr=") +
           sessionProbe_.apStreamProtocolErrors() + F(" stale=") + sessionProbe_.apStreamStalePackets() +
-          F(" trackCancel=") + sessionProbe_.apStreamTrackChangeCancels() + F(" pending=") +
+          F(" postComplete=") + sessionProbe_.apStreamPostCompletePackets() + F(" trackCancel=") +
+          sessionProbe_.apStreamTrackChangeCancels() + F(" pending=") +
           (sessionProbe_.apStreamPending() ? F("yes") : F("no")));
     n.add(String(F("AP Stream channel=")) + sessionProbe_.apStreamChannelId() + F(" requestBytes=") +
           sessionProbe_.apStreamRequestBytes() + F(" requested=") + sessionProbe_.apStreamRequestedBytes() +
-          F(" responsePackets=") + sessionProbe_.apStreamResponsePackets() + F(" lastCmd=0x") +
+          F(" totalRequested=") + sessionProbe_.apStreamTotalRequestedBytes() + F(" probe=") +
+          sessionProbe_.apStreamCompletedProbes() + F("/") + sessionProbe_.apStreamProbeCount() +
+          F(" offset=") + sessionProbe_.apStreamCurrentOffsetBytes() + F(" responsePackets=") +
+          sessionProbe_.apStreamResponsePackets() + F(" lastCmd=0x") +
           String(sessionProbe_.apStreamLastCommand(), HEX) + F(" failureCode=") +
           sessionProbe_.apStreamFailureCode());
     n.add(String(F("AP Stream headers=")) + sessionProbe_.apStreamHeaderCount() + F(" headerBytes=") +
@@ -321,7 +404,7 @@ public:
     n.add(String(F("AP task attempts=")) + sessionProbe_.attempts() +
           F(" heap=") + sessionProbe_.heapBefore() + F("->") + sessionProbe_.heapAfter() +
           F(" minHeap=") + sessionProbe_.minHeapSeen() + F(" stackMin=") + sessionProbe_.stackMinFree());
-    n.add(F("scope=metadata -> RequestKey diagnostics -> ProductInfo headFiles=0 -> AP StreamChunk 4KiB encrypted canary; decrypt/decoder remain closed"));
+    n.add(F("scope=metadata -> one RequestKey diagnostic scan per session -> media-key service-block latch/suppression -> qualified AP StreamChunk canary; decrypt/decoder remain closed"));
 
     JsonArray a=user.createNestedArray(F("Spotify audio"));
     const auto t=audio_.telemetry();

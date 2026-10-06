@@ -1,7 +1,7 @@
 {
   "name": "wled-usermod-spotify",
-  "version": "0.1.0-dev.2l-ap-stream-r1",
-  "description": "Spotify Connect bounded AP StreamChunk canary usermod for WLED on Waveshare ESP32-S3 RGB Matrix",
+  "version": "0.1.0-dev.2m-key-block-r14",
+  "description": "Spotify Connect media-key service-block hardening usermod for WLED on Waveshare ESP32-S3 RGB Matrix",
   "keywords": [
     "wled",
     "spotify",
