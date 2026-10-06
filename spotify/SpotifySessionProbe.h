@@ -5,14 +5,15 @@
 #include <freertos/task.h>
 #include <vector>
 
-// dev.2h-r1a track metadata acquisition diagnostics gate.
+// dev.2l-r1 bounded AP StreamChunk canary.
 //
-// Qualified dev.2g SPIRC transfer activation behavior is retained. After an
-// accepted remote Load, this gate extracts the selected TrackRef (GID/URI), issues
-// the legacy Mercury track metadata GET used by librespot-compatible clients, and
-// decodes enough of spotify.metadata.Track to expose title/artist/album/duration,
-// cover id and audio-file inventory. It deliberately does not request audio keys,
-// resolve CDN storage, decode tracks, or feed Spotify audio into the PCM backend.
+// Qualified dev.2i-r2 metadata/audio-key behavior is retained unchanged. dev.2j-r2
+// proved that ProductInfo carries head-files=0 for this account, and dev.2k-r1
+// proved on the real WLED target that the prebuilt framework lacks the mbedTLS TLS
+// engine required by esp_http_client/esp-tls. dev.2l therefore tests the historical
+// AP media channel already available inside the authenticated Shannon session. It
+// requests only 4 KiB of the preferred encrypted AudioFile and discards data after
+// counting it. No AES decrypt, decoder, CDN, Login5 or alternate TLS stack is added.
 class SpotifySessionProbe {
 public:
   enum class State : uint8_t {
@@ -153,6 +154,91 @@ public:
   int32_t metadataPreferredFormat() const { return metadataPreferredFormat_; }
   const char* metadataPreferredFileIdHex() const { return metadataPreferredFileIdHex_; }
 
+  uint32_t audioKeyRequests() const { return audioKeyRequests_; }
+  uint32_t audioKeyResponses() const { return audioKeyResponses_; }
+  uint32_t audioKeySuccesses() const { return audioKeySuccesses_; }
+  uint32_t audioKeyErrors() const { return audioKeyErrors_; }
+  uint32_t audioKeyTimeouts() const { return audioKeyTimeouts_; }
+  uint32_t audioKeyServiceRejects() const { return audioKeyServiceRejects_; }
+  uint32_t audioKeyProtocolErrors() const { return audioKeyProtocolErrors_; }
+  uint32_t audioKeyStaleResponses() const { return audioKeyStaleResponses_; }
+  uint32_t audioKeyTrackChangeCancels() const { return audioKeyTrackChangeCancels_; }
+  bool audioKeyPending() const { return audioKeyPending_; }
+  uint32_t audioKeyLastSequence() const { return audioKeyLastSequence_; }
+  size_t audioKeyRequestBytes() const { return audioKeyRequestBytes_; }
+  size_t audioKeyBytes() const { return audioKeyBytes_; }
+  uint8_t audioKeyLastCommand() const { return audioKeyLastCommand_; }
+  uint8_t audioKeyError0() const { return audioKeyError0_; }
+  uint8_t audioKeyError1() const { return audioKeyError1_; }
+  uint8_t audioKeyCandidateCount() const { return audioKeyCandidateCount_; }
+  uint8_t audioKeyCandidateIndex() const { return audioKeyCandidateIndex_; }
+  int32_t audioKeyCandidateFormat() const {
+    return audioKeyCandidateIndex_ < audioKeyCandidateCount_
+               ? audioKeyCandidateFormats_[audioKeyCandidateIndex_]
+               : -1;
+  }
+  uint32_t audioKeyCandidateAdvances() const { return audioKeyCandidateAdvances_; }
+  uint32_t audioKeyCandidateTruncated() const { return audioKeyCandidateTruncated_; }
+  int32_t audioKeyCandidateFormatAt(uint8_t index) const {
+    return index < audioKeyCandidateCount_ ? audioKeyCandidateFormats_[index] : -1;
+  }
+  uint8_t audioKeyCandidateResultCommandAt(uint8_t index) const {
+    return index < audioKeyCandidateCount_ ? audioKeyCandidateResultCommand_[index] : 0u;
+  }
+  uint8_t audioKeyCandidateError0At(uint8_t index) const {
+    return index < audioKeyCandidateCount_ ? audioKeyCandidateError0_[index] : 0u;
+  }
+  uint8_t audioKeyCandidateError1At(uint8_t index) const {
+    return index < audioKeyCandidateCount_ ? audioKeyCandidateError1_[index] : 0u;
+  }
+  bool audioKeyCandidateTimedOutAt(uint8_t index) const {
+    return index < audioKeyCandidateCount_ && audioKeyCandidateTimedOut_[index];
+  }
+
+  uint32_t productInfoPackets() const { return productInfoPackets_; }
+  size_t productInfoBytes() const { return productInfoBytes_; }
+  uint32_t productInfoHash() const { return productInfoHash_; }
+  bool productInfoXmlLike() const { return productInfoXmlLike_; }
+  const char* productInfoType() const { return productInfoType_; }
+  const char* productInfoCatalogue() const { return productInfoCatalogue_; }
+  const char* productInfoPlayerLicense() const { return productInfoPlayerLicense_; }
+  const char* productInfoHeadFiles() const { return productInfoHeadFiles_; }
+  bool headFileTemplateAvailable() const { return headFileTemplate_[0] != '\0'; }
+  const char* headFileScheme() const { return headFileScheme_; }
+  uint32_t mediaHeadAttempts() const { return mediaHeadAttempts_; }
+  uint32_t mediaHeadSuccesses() const { return mediaHeadSuccesses_; }
+  uint32_t mediaHeadSkipped() const { return mediaHeadSkipped_; }
+  int mediaHeadHttpCode() const { return mediaHeadHttpCode_; }
+  int32_t mediaHeadContentLength() const { return mediaHeadContentLength_; }
+  size_t mediaHeadBytes() const { return mediaHeadBytes_; }
+  bool mediaHeadRangeHonored() const { return mediaHeadRangeHonored_; }
+  bool mediaHeadOggCapture() const { return mediaHeadOggCapture_; }
+  uint32_t mediaHeadUnsupportedScheme() const { return mediaHeadUnsupportedScheme_; }
+  const char* mediaHeadLastError() const { return mediaHeadLastError_; }
+
+  uint32_t apStreamAttempts() const { return apStreamAttempts_; }
+  uint32_t apStreamSuccesses() const { return apStreamSuccesses_; }
+  uint32_t apStreamFailures() const { return apStreamFailures_; }
+  uint32_t apStreamTimeouts() const { return apStreamTimeouts_; }
+  uint32_t apStreamProtocolErrors() const { return apStreamProtocolErrors_; }
+  uint32_t apStreamStalePackets() const { return apStreamStalePackets_; }
+  uint32_t apStreamTrackChangeCancels() const { return apStreamTrackChangeCancels_; }
+  bool apStreamPending() const { return apStreamPending_; }
+  uint16_t apStreamChannelId() const { return apStreamChannelId_; }
+  size_t apStreamRequestBytes() const { return apStreamRequestBytes_; }
+  uint32_t apStreamRequestedBytes() const { return AP_STREAM_CANARY_BYTES; }
+  uint32_t apStreamResponsePackets() const { return apStreamResponsePackets_; }
+  uint8_t apStreamLastCommand() const { return apStreamLastCommand_; }
+  uint16_t apStreamFailureCode() const { return apStreamFailureCode_; }
+  uint32_t apStreamHeaderCount() const { return apStreamHeaderCount_; }
+  size_t apStreamHeaderBytes() const { return apStreamHeaderBytes_; }
+  uint32_t apStreamReportedFileBytes() const { return apStreamReportedFileBytes_; }
+  uint32_t apStreamDataPackets() const { return apStreamDataPackets_; }
+  size_t apStreamDataBytes() const { return apStreamDataBytes_; }
+  bool apStreamHeadersComplete() const { return apStreamHeadersComplete_; }
+  int32_t apStreamCandidateFormat() const { return apStreamCandidateFormat_; }
+  const char* apStreamLastError() const { return apStreamLastError_; }
+
   uint32_t reconnectAttempts() const { return reconnectAttempts_; }
   uint32_t reconnectSuccesses() const { return reconnectSuccesses_; }
 
@@ -169,6 +255,14 @@ private:
   static constexpr uint32_t SESSION_POLL_MS = 250u;
   static constexpr uint32_t SESSION_RX_TIMEOUT_MS = 130000u;
   static constexpr uint32_t RECONNECT_DELAY_MS = 2500u;
+  static constexpr uint32_t AUDIO_KEY_TIMEOUT_MS = 2500u;
+  static constexpr uint8_t MAX_AUDIO_KEY_CANDIDATES = 8u;
+  static constexpr size_t MEDIA_HEAD_MAX_BYTES = 4096u;
+  static constexpr uint32_t MEDIA_HEAD_TIMEOUT_MS = 5000u;
+  static constexpr size_t AP_STREAM_CANARY_BYTES = 4096u;
+  static constexpr uint32_t AP_STREAM_WORD_BYTES = 4u;
+  static constexpr uint32_t AP_STREAM_CANARY_WORDS = AP_STREAM_CANARY_BYTES / AP_STREAM_WORD_BYTES;
+  static constexpr uint32_t AP_STREAM_TIMEOUT_MS = 5000u;
   static constexpr uint32_t MAX_AUTO_RECONNECTS = 5u;
   static constexpr size_t MAX_AP_PLAIN_PACKET = 16384u;
   static constexpr size_t MAX_AP_ENCRYPTED_PACKET = 16384u;
@@ -179,7 +273,11 @@ private:
   bool resolveAccessPoint(String& endpoint);
   bool resolveWithHttp(String& endpoint);
   static bool extractFirstEndpoint(const String& json, const char* key, String& endpoint);
+  static bool extractXmlTag(const std::vector<uint8_t>& payload, const char* tag, String& value);
   static bool splitEndpoint(const String& endpoint, String& host, uint16_t& port);
+  bool fetchMediaHeadCandidate(uint8_t candidateIndex);
+  void setMediaHeadError(const char* text);
+  void setApStreamError(const char* text);
   void setError(const char* text);
   void setEndpoint(const String& endpoint);
   void setResolverMode(const char* mode);
@@ -299,6 +397,86 @@ private:
   uint32_t metadataAudioFileCount_ = 0u;
   int32_t metadataPreferredFormat_ = -1;
   char metadataPreferredFileIdHex_[41] = {0};
+
+  uint8_t selectedTrackGid_[16] = {0};
+  uint8_t selectedAudioFileId_[20] = {0};
+  uint8_t audioKey_[16] = {0};
+  uint8_t audioKeyCandidateFileIds_[MAX_AUDIO_KEY_CANDIDATES][20] = {{0}};
+  int32_t audioKeyCandidateFormats_[MAX_AUDIO_KEY_CANDIDATES] = {0};
+  uint8_t audioKeyCandidateResultCommand_[MAX_AUDIO_KEY_CANDIDATES] = {0};
+  uint8_t audioKeyCandidateError0_[MAX_AUDIO_KEY_CANDIDATES] = {0};
+  uint8_t audioKeyCandidateError1_[MAX_AUDIO_KEY_CANDIDATES] = {0};
+  bool audioKeyCandidateTimedOut_[MAX_AUDIO_KEY_CANDIDATES] = {false};
+  uint8_t audioKeyCandidateCount_ = 0u;
+  uint8_t audioKeyCandidateIndex_ = 0u;
+  uint32_t audioKeyCandidateAdvances_ = 0u;
+  uint32_t audioKeyCandidateTruncated_ = 0u;
+  uint32_t audioKeyNextSequence_ = 0u;
+  uint32_t audioKeyPendingSequence_ = 0u;
+  uint32_t audioKeyLastSequence_ = 0u;
+  uint32_t audioKeyRequestedAtMs_ = 0u;
+  uint32_t audioKeyRequests_ = 0u;
+  uint32_t audioKeyResponses_ = 0u;
+  uint32_t audioKeySuccesses_ = 0u;
+  uint32_t audioKeyErrors_ = 0u;
+  uint32_t audioKeyTimeouts_ = 0u;
+  uint32_t audioKeyServiceRejects_ = 0u;
+  uint32_t audioKeyProtocolErrors_ = 0u;
+  uint32_t audioKeyStaleResponses_ = 0u;
+  uint32_t audioKeyTrackChangeCancels_ = 0u;
+  size_t audioKeyRequestBytes_ = 0u;
+  size_t audioKeyBytes_ = 0u;
+  uint8_t audioKeyLastCommand_ = 0u;
+  uint8_t audioKeyError0_ = 0u;
+  uint8_t audioKeyError1_ = 0u;
+  bool audioKeyPending_ = false;
+
+  uint32_t productInfoPackets_ = 0u;
+  size_t productInfoBytes_ = 0u;
+  uint32_t productInfoHash_ = 0u;
+  bool productInfoXmlLike_ = false;
+  char productInfoType_[20] = "none";
+  char productInfoCatalogue_[20] = "none";
+  char productInfoPlayerLicense_[20] = "none";
+  char productInfoHeadFiles_[12] = "none";
+  char headFileTemplate_[192] = {0};
+  char headFileScheme_[8] = "none";
+  uint32_t mediaHeadAttempts_ = 0u;
+  uint32_t mediaHeadSuccesses_ = 0u;
+  uint32_t mediaHeadSkipped_ = 0u;
+  int mediaHeadHttpCode_ = 0;
+  int32_t mediaHeadContentLength_ = -1;
+  size_t mediaHeadBytes_ = 0u;
+  bool mediaHeadRangeHonored_ = false;
+  bool mediaHeadOggCapture_ = false;
+  uint32_t mediaHeadUnsupportedScheme_ = 0u;
+  bool mediaHeadFetchedForTrack_ = false;
+  char mediaHeadLastError_[80] = "none";
+
+  uint32_t apStreamAttempts_ = 0u;
+  uint32_t apStreamSuccesses_ = 0u;
+  uint32_t apStreamFailures_ = 0u;
+  uint32_t apStreamTimeouts_ = 0u;
+  uint32_t apStreamProtocolErrors_ = 0u;
+  uint32_t apStreamStalePackets_ = 0u;
+  uint32_t apStreamTrackChangeCancels_ = 0u;
+  uint16_t apStreamNextChannelId_ = 0u;
+  uint16_t apStreamChannelId_ = 0u;
+  uint32_t apStreamRequestedAtMs_ = 0u;
+  size_t apStreamRequestBytes_ = 0u;
+  uint32_t apStreamResponsePackets_ = 0u;
+  uint8_t apStreamLastCommand_ = 0u;
+  uint16_t apStreamFailureCode_ = 0u;
+  uint32_t apStreamHeaderCount_ = 0u;
+  size_t apStreamHeaderBytes_ = 0u;
+  uint32_t apStreamReportedFileBytes_ = 0u;
+  uint32_t apStreamDataPackets_ = 0u;
+  size_t apStreamDataBytes_ = 0u;
+  int32_t apStreamCandidateFormat_ = -1;
+  bool apStreamHeadersComplete_ = false;
+  bool apStreamPending_ = false;
+  bool apStreamAttemptedForTrack_ = false;
+  char apStreamLastError_[96] = "none";
 
   uint32_t reconnectAttempts_ = 0u;
   uint32_t reconnectSuccesses_ = 0u;

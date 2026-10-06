@@ -33,3 +33,15 @@ expectations have one authoritative location.
 ### dev.2h-r1
 
 `test_dev2h_metadata_contract.py` guards selected TrackRef extraction, `hm://metadata/3/track/<gid>` Mercury GET, legacy track/album/artist/cover/audio-file parsing, metadata telemetry, and the explicit absence of audio-key/CDN/decode work from this gate.
+
+### dev.2i-r2
+
+`test_dev2i_audio_key_contract.py` preserves the r1 RequestKey/AesKey wire contract and adds source guards for the bounded AudioFile candidate set, single-step candidate advance, track-change cancellation, stale-response handling and no-raw-key telemetry. Real candidate ordering/results remain a hardware gate in `hardware_checks.tsv`.
+
+### dev.2j-r2
+
+`test_dev2j_media_head_contract.py` guards AP ProductInfo `0x50` handling, bounded
+`head-files-url` consumption, the 4 KiB range cap, explicit HTTPS classification,
+no secure-client-header regression, and redacted media-head telemetry. Real
+ProductInfo scheme/status/body evidence remains a hardware gate in
+`hardware_checks.tsv`.

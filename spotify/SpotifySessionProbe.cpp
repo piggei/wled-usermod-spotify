@@ -10,6 +10,7 @@
 #include <mbedtls/bignum.h>
 #include <mbedtls/sha1.h>
 
+
 namespace {
 constexpr const char* APRESOLVE_HTTP = "http://apresolve.spotify.com/?type=accesspoint";
 constexpr const char* AP_FALLBACK = "ap.spotify.com:443";
@@ -33,6 +34,16 @@ constexpr uint8_t AUTH_DECLINED_COMMAND = 0xADu;
 constexpr uint8_t PING_COMMAND = 0x04u;
 constexpr uint8_t PONG_COMMAND = 0x49u;
 constexpr uint8_t COUNTRY_CODE_COMMAND = 0x1Bu;
+constexpr uint8_t PRODUCT_INFO_COMMAND = 0x50u;
+constexpr uint8_t STREAM_CHUNK_REQUEST_COMMAND = 0x08u;
+constexpr uint8_t STREAM_CHUNK_SUCCESS_COMMAND = 0x09u;
+constexpr uint8_t STREAM_CHUNK_FAILURE_COMMAND = 0x0Au;
+constexpr uint8_t REQUEST_KEY_COMMAND = 0x0Cu;
+constexpr uint8_t AES_KEY_COMMAND = 0x0Du;
+constexpr uint8_t AES_KEY_ERROR_COMMAND = 0x0Eu;
+constexpr size_t TRACK_GID_BYTES = 16u;
+constexpr size_t AUDIO_FILE_ID_BYTES = 20u;
+constexpr size_t AUDIO_AES_KEY_BYTES = 16u;
 constexpr uint8_t MERCURY_SEND_COMMAND = 0xB2u;
 constexpr uint8_t MERCURY_SUB_COMMAND = 0xB3u;
 constexpr uint8_t MERCURY_UNSUB_COMMAND = 0xB4u;
@@ -44,6 +55,7 @@ constexpr uint32_t SPIRC_PLAY = 0x15u;
 constexpr uint32_t SPIRC_PAUSE = 0x16u;
 constexpr const char* SPIRC_PROTOCOL_VERSION = "2.7.1";
 constexpr const char* TRACK_METADATA_PREFIX = "hm://metadata/3/track/";
+
 
 bool sha1Digest(const uint8_t* data, size_t size, uint8_t out[SHA1_BYTES]) {
   if (!out || (!data && size != 0u)) return false;
@@ -535,7 +547,58 @@ String bytesToHex(const uint8_t* data, size_t size) {
   return out;
 }
 
+std::vector<uint8_t> buildAudioKeyRequest(const uint8_t fileId[AUDIO_FILE_ID_BYTES],
+                                          const uint8_t trackGid[TRACK_GID_BYTES],
+                                          uint32_t sequence) {
+  std::vector<uint8_t> out;
+  if (!fileId || !trackGid) return out;
+  out.reserve(AUDIO_FILE_ID_BYTES + TRACK_GID_BYTES + 6u);
+  out.insert(out.end(), fileId, fileId + AUDIO_FILE_ID_BYTES);
+  out.insert(out.end(), trackGid, trackGid + TRACK_GID_BYTES);
+  out.push_back(static_cast<uint8_t>((sequence >> 24u) & 0xffu));
+  out.push_back(static_cast<uint8_t>((sequence >> 16u) & 0xffu));
+  out.push_back(static_cast<uint8_t>((sequence >> 8u) & 0xffu));
+  out.push_back(static_cast<uint8_t>(sequence & 0xffu));
+  out.push_back(0x00u);
+  out.push_back(0x00u);
+  return out;
+}
+
+std::vector<uint8_t> buildApStreamChunkRequest(uint16_t channelId,
+                                               const uint8_t fileId[AUDIO_FILE_ID_BYTES],
+                                               uint32_t offsetWords,
+                                               uint32_t sizeWords) {
+  std::vector<uint8_t> out;
+  if (!fileId || sizeWords == 0u || offsetWords > 0xffffffffu - sizeWords) return out;
+  out.reserve(46u);
+  appendBe16(out, channelId);
+  out.push_back(0x00u);
+  out.push_back(0x01u);
+  appendBe16(out, 0x0000u);
+  appendBe32(out, 0x00000000u);
+  appendBe32(out, 0x00009C40u);
+  appendBe32(out, 0x00020000u);
+  out.insert(out.end(), fileId, fileId + AUDIO_FILE_ID_BYTES);
+  appendBe32(out, offsetWords);
+  appendBe32(out, offsetWords + sizeWords);
+  return out;
+}
+
+bool readBe32Prefix(const std::vector<uint8_t>& data, uint32_t& value) {
+  if (data.size() < 4u) return false;
+  value = (static_cast<uint32_t>(data[0]) << 24u) |
+          (static_cast<uint32_t>(data[1]) << 16u) |
+          (static_cast<uint32_t>(data[2]) << 8u) |
+          static_cast<uint32_t>(data[3]);
+  return true;
+}
+
 struct LegacyTrackMetadataInfo {
+  struct AudioFileCandidate {
+    int32_t format = -1;
+    std::vector<uint8_t> fileId;
+  };
+
   String title;
   String artists;
   String album;
@@ -545,6 +608,7 @@ struct LegacyTrackMetadataInfo {
   uint32_t audioFileCount = 0u;
   int32_t preferredFormat = -1;
   std::vector<uint8_t> preferredFileId;
+  std::vector<AudioFileCandidate> audioFiles;
 };
 
 bool parseLegacyAlbum(const uint8_t* data, size_t size, LegacyTrackMetadataInfo& info) {
@@ -635,8 +699,13 @@ bool parseLegacyTrackMetadata(const std::vector<uint8_t>& data, LegacyTrackMetad
         uint64_t format = 0u;
         extractLengthDelimited(item, len, 1u, fileId);
         const bool hasFormat = extractProtoVarint(item, len, 2u, format);
-        if (!fileId.empty()) {
-          const bool prefer = info.preferredFileId.empty() || (hasFormat && format == 1u);
+        if (fileId.size() == AUDIO_FILE_ID_BYTES) {
+          LegacyTrackMetadataInfo::AudioFileCandidate candidate;
+          candidate.format = hasFormat ? static_cast<int32_t>(format) : -1;
+          candidate.fileId = fileId;
+          info.audioFiles.push_back(candidate);
+          const bool prefer = info.preferredFileId.empty() ||
+                              (hasFormat && format == 1u && info.preferredFormat != 1);
           if (prefer) {
             info.preferredFileId = fileId;
             info.preferredFormat = hasFormat ? static_cast<int32_t>(format) : -1;
@@ -985,6 +1054,186 @@ void SpotifySessionProbe::setError(const char* text) {
   strlcpy(lastError_, text ? text : "unknown", sizeof(lastError_));
 }
 
+void SpotifySessionProbe::setMediaHeadError(const char* text) {
+  strlcpy(mediaHeadLastError_, text ? text : "unknown", sizeof(mediaHeadLastError_));
+}
+
+void SpotifySessionProbe::setApStreamError(const char* text) {
+  strlcpy(apStreamLastError_, text ? text : "unknown", sizeof(apStreamLastError_));
+}
+
+bool SpotifySessionProbe::extractXmlTag(const std::vector<uint8_t>& payload,
+                                        const char* tag, String& value) {
+  value = String();
+  if (!tag || !*tag || payload.empty()) return false;
+
+  const size_t tagLen = strlen(tag);
+  const String closeTag = String(F("</")) + tag + '>';
+  auto findNeedle = [&payload](const String& needle, size_t start) -> int32_t {
+    const size_t needleLen = needle.length();
+    if (needleLen == 0u || start > payload.size() || needleLen > payload.size() - start) return -1;
+    const char* raw = needle.c_str();
+    for (size_t i = start; i + needleLen <= payload.size(); ++i) {
+      if (memcmp(payload.data() + i, raw, needleLen) == 0) return static_cast<int32_t>(i);
+    }
+    return -1;
+  };
+
+  // Match <tag> as well as <tag attr=...>. quick_xml used by current
+  // librespot accepts both forms; dev.2j-r1 only matched the first form.
+  size_t openAt = payload.size();
+  size_t valueStart = payload.size();
+  for (size_t i = 0u; i + tagLen + 2u <= payload.size(); ++i) {
+    if (payload[i] != '<' || memcmp(payload.data() + i + 1u, tag, tagLen) != 0) continue;
+    const size_t afterName = i + 1u + tagLen;
+    const uint8_t delimiter = payload[afterName];
+    if (delimiter != '>' && delimiter != ' ' && delimiter != '\t' &&
+        delimiter != '\r' && delimiter != '\n') continue;
+    size_t gt = afterName;
+    while (gt < payload.size() && payload[gt] != '>') ++gt;
+    if (gt >= payload.size()) return false;
+    openAt = i;
+    valueStart = gt + 1u;
+    break;
+  }
+  if (openAt == payload.size() || valueStart > payload.size()) return false;
+
+  const int32_t closeAt = findNeedle(closeTag, valueStart);
+  if (closeAt < 0 || static_cast<size_t>(closeAt) < valueStart) return false;
+  const size_t valueLen = static_cast<size_t>(closeAt) - valueStart;
+  if (valueLen >= 256u) return false;
+
+  value.reserve(static_cast<unsigned int>(valueLen));
+  for (size_t i = 0u; i < valueLen; ++i) {
+    const uint8_t byte = payload[valueStart + i];
+    if (byte == 0u) return false;
+    value += static_cast<char>(byte);
+  }
+  value.replace("&amp;", "&");
+  return true;
+}
+
+bool SpotifySessionProbe::fetchMediaHeadCandidate(uint8_t candidateIndex) {
+  if (mediaHeadFetchedForTrack_) return mediaHeadSuccesses_ != 0u && mediaHeadBytes_ != 0u;
+  mediaHeadHttpCode_ = 0;
+  mediaHeadContentLength_ = -1;
+  mediaHeadBytes_ = 0u;
+  mediaHeadRangeHonored_ = false;
+  mediaHeadOggCapture_ = false;
+  setMediaHeadError("none");
+
+  if (candidateIndex >= audioKeyCandidateCount_ || candidateIndex >= MAX_AUDIO_KEY_CANDIDATES) {
+    ++mediaHeadSkipped_;
+    setMediaHeadError("no valid preferred audio file candidate");
+    return false;
+  }
+  if (headFileTemplate_[0] == '\0') {
+    ++mediaHeadSkipped_;
+    setMediaHeadError("ProductInfo head-files-url missing");
+    return false;
+  }
+
+  mediaHeadFetchedForTrack_ = true;
+
+  const String headTemplate(headFileTemplate_);
+  if (headTemplate.startsWith(F("https://"))) {
+    ++mediaHeadUnsupportedScheme_;
+    ++mediaHeadSkipped_;
+    setMediaHeadError("HTTPS head-files-url unsupported by this gate");
+    return false;
+  }
+  if (!headTemplate.startsWith(F("http://"))) {
+    ++mediaHeadUnsupportedScheme_;
+    ++mediaHeadSkipped_;
+    setMediaHeadError("head-files-url scheme unsupported");
+    return false;
+  }
+
+  const int placeholder = headTemplate.indexOf("{file_id}");
+  if (placeholder < 0) {
+    ++mediaHeadSkipped_;
+    setMediaHeadError("head-files-url has no file_id placeholder");
+    return false;
+  }
+
+  String url = headTemplate;
+  const String fileIdHex = bytesToHex(audioKeyCandidateFileIds_[candidateIndex], AUDIO_FILE_ID_BYTES);
+  url.replace("{file_id}", fileIdHex);
+  if (url.length() == 0u || url.length() > 255u) {
+    ++mediaHeadSkipped_;
+    setMediaHeadError("expanded head-files-url invalid");
+    return false;
+  }
+
+  ++mediaHeadAttempts_;
+  WiFiClient client;
+  HTTPClient http;
+  http.setConnectTimeout(MEDIA_HEAD_TIMEOUT_MS);
+  http.setTimeout(MEDIA_HEAD_TIMEOUT_MS);
+  http.setReuse(false);
+  if (!http.begin(client, url)) {
+    setMediaHeadError("HTTP begin failed");
+    return false;
+  }
+
+  const String range = String(F("bytes=0-")) + String(MEDIA_HEAD_MAX_BYTES - 1u);
+  http.addHeader(F("Range"), range);
+  const int code = http.GET();
+  mediaHeadHttpCode_ = code;
+  mediaHeadContentLength_ = http.getSize();
+  mediaHeadRangeHonored_ = (code == HTTP_CODE_PARTIAL_CONTENT);
+  if (code != HTTP_CODE_OK && code != HTTP_CODE_PARTIAL_CONTENT) {
+    setMediaHeadError("head-file HTTP status not 200/206");
+    http.end();
+    return false;
+  }
+
+  auto* stream = http.getStreamPtr();
+  if (!stream) {
+    setMediaHeadError("head-file stream missing");
+    http.end();
+    return false;
+  }
+
+  uint8_t firstBytes[4] = {0u, 0u, 0u, 0u};
+  size_t firstCount = 0u;
+  uint8_t scratch[256];
+  const uint32_t started = millis();
+  while (mediaHeadBytes_ < MEDIA_HEAD_MAX_BYTES && millis() - started < MEDIA_HEAD_TIMEOUT_MS) {
+    const int available = stream->available();
+    if (available <= 0) {
+      if (!stream->connected()) break;
+      delay(1u);
+      continue;
+    }
+    size_t want = static_cast<size_t>(available);
+    if (want > sizeof(scratch)) want = sizeof(scratch);
+    const size_t remaining = MEDIA_HEAD_MAX_BYTES - mediaHeadBytes_;
+    if (want > remaining) want = remaining;
+    const int got = stream->read(scratch, want);
+    if (got <= 0) break;
+    const size_t gotSize = static_cast<size_t>(got);
+    for (size_t i = 0u; i < gotSize && firstCount < sizeof(firstBytes); ++i) {
+      firstBytes[firstCount++] = scratch[i];
+    }
+    mediaHeadBytes_ += gotSize;
+  }
+  http.end();
+
+  if (firstCount == sizeof(firstBytes) &&
+      firstBytes[0] == 'O' && firstBytes[1] == 'g' && firstBytes[2] == 'g' && firstBytes[3] == 'S') {
+    mediaHeadOggCapture_ = true;
+  }
+  if (mediaHeadBytes_ == 0u) {
+    setMediaHeadError("head-file returned no body bytes");
+    return false;
+  }
+
+  ++mediaHeadSuccesses_;
+  setMediaHeadError("none");
+  return true;
+}
+
 void SpotifySessionProbe::setEndpoint(const String& endpoint) {
   strlcpy(endpoint_, endpoint.c_str(), sizeof(endpoint_));
 }
@@ -1085,6 +1334,67 @@ bool SpotifySessionProbe::startNow(const String& userName, uint8_t authType,
   metadataMercurySequence_ = ~static_cast<uint64_t>(0);
   metadataLastStatus_ = 0;
   metadataLastBytes_ = 0u;
+  audioKeyPending_ = false;
+  audioKeyPendingSequence_ = 0u;
+  audioKeyRequestedAtMs_ = 0u;
+  memset(selectedAudioFileId_, 0, sizeof(selectedAudioFileId_));
+  memset(audioKey_, 0, sizeof(audioKey_));
+  audioKeyBytes_ = 0u;
+  audioKeyLastCommand_ = 0u;
+  audioKeyError0_ = 0u;
+  audioKeyError1_ = 0u;
+  audioKeyRequestBytes_ = 0u;
+  audioKeyBytes_ = 0u;
+  audioKeyLastCommand_ = 0u;
+  audioKeyError0_ = 0u;
+  audioKeyError1_ = 0u;
+  memset(audioKeyCandidateFileIds_, 0, sizeof(audioKeyCandidateFileIds_));
+  for (uint8_t i = 0u; i < MAX_AUDIO_KEY_CANDIDATES; ++i) audioKeyCandidateFormats_[i] = -1;
+  memset(audioKeyCandidateResultCommand_, 0, sizeof(audioKeyCandidateResultCommand_));
+  memset(audioKeyCandidateError0_, 0, sizeof(audioKeyCandidateError0_));
+  memset(audioKeyCandidateError1_, 0, sizeof(audioKeyCandidateError1_));
+  memset(audioKeyCandidateTimedOut_, 0, sizeof(audioKeyCandidateTimedOut_));
+  audioKeyCandidateCount_ = 0u;
+  audioKeyCandidateIndex_ = 0u;
+  audioKeyCandidateAdvances_ = 0u;
+  audioKeyCandidateTruncated_ = 0u;
+  audioKeyServiceRejects_ = 0u;
+  audioKeyProtocolErrors_ = 0u;
+  audioKeyStaleResponses_ = 0u;
+  audioKeyTrackChangeCancels_ = 0u;
+  memset(audioKey_, 0, sizeof(audioKey_));
+  productInfoBytes_ = 0u;
+  productInfoHash_ = 0u;
+  productInfoXmlLike_ = false;
+  strlcpy(productInfoType_, "none", sizeof(productInfoType_));
+  strlcpy(productInfoCatalogue_, "none", sizeof(productInfoCatalogue_));
+  strlcpy(productInfoPlayerLicense_, "none", sizeof(productInfoPlayerLicense_));
+  strlcpy(productInfoHeadFiles_, "none", sizeof(productInfoHeadFiles_));
+  memset(headFileTemplate_, 0, sizeof(headFileTemplate_));
+  strlcpy(headFileScheme_, "none", sizeof(headFileScheme_));
+  mediaHeadHttpCode_ = 0;
+  mediaHeadContentLength_ = -1;
+  mediaHeadBytes_ = 0u;
+  mediaHeadRangeHonored_ = false;
+  mediaHeadOggCapture_ = false;
+  mediaHeadFetchedForTrack_ = false;
+  setMediaHeadError("none");
+  apStreamChannelId_ = 0u;
+  apStreamRequestedAtMs_ = 0u;
+  apStreamRequestBytes_ = 0u;
+  apStreamResponsePackets_ = 0u;
+  apStreamLastCommand_ = 0u;
+  apStreamFailureCode_ = 0u;
+  apStreamHeaderCount_ = 0u;
+  apStreamHeaderBytes_ = 0u;
+  apStreamReportedFileBytes_ = 0u;
+  apStreamDataPackets_ = 0u;
+  apStreamDataBytes_ = 0u;
+  apStreamCandidateFormat_ = -1;
+  apStreamHeadersComplete_ = false;
+  apStreamPending_ = false;
+  apStreamAttemptedForTrack_ = false;
+  setApStreamError("none");
   spircHelloBytes_ = 0u;
   lastRxMs_ = 0u;
   heapBefore_ = ESP.getFreeHeap();
@@ -1211,6 +1521,83 @@ void SpotifySessionProbe::reset() {
   metadataAudioFileCount_ = 0u;
   metadataPreferredFormat_ = -1;
   memset(metadataPreferredFileIdHex_, 0, sizeof(metadataPreferredFileIdHex_));
+  memset(selectedTrackGid_, 0, sizeof(selectedTrackGid_));
+  memset(selectedAudioFileId_, 0, sizeof(selectedAudioFileId_));
+  memset(audioKey_, 0, sizeof(audioKey_));
+  memset(audioKeyCandidateFileIds_, 0, sizeof(audioKeyCandidateFileIds_));
+  for (uint8_t i = 0u; i < MAX_AUDIO_KEY_CANDIDATES; ++i) audioKeyCandidateFormats_[i] = -1;
+  memset(audioKeyCandidateResultCommand_, 0, sizeof(audioKeyCandidateResultCommand_));
+  memset(audioKeyCandidateError0_, 0, sizeof(audioKeyCandidateError0_));
+  memset(audioKeyCandidateError1_, 0, sizeof(audioKeyCandidateError1_));
+  memset(audioKeyCandidateTimedOut_, 0, sizeof(audioKeyCandidateTimedOut_));
+  audioKeyCandidateCount_ = 0u;
+  audioKeyCandidateIndex_ = 0u;
+  audioKeyCandidateAdvances_ = 0u;
+  audioKeyCandidateTruncated_ = 0u;
+  audioKeyNextSequence_ = 0u;
+  audioKeyPendingSequence_ = 0u;
+  audioKeyLastSequence_ = 0u;
+  audioKeyRequestedAtMs_ = 0u;
+  audioKeyRequests_ = 0u;
+  audioKeyResponses_ = 0u;
+  audioKeySuccesses_ = 0u;
+  audioKeyErrors_ = 0u;
+  audioKeyTimeouts_ = 0u;
+  audioKeyServiceRejects_ = 0u;
+  audioKeyProtocolErrors_ = 0u;
+  audioKeyStaleResponses_ = 0u;
+  audioKeyTrackChangeCancels_ = 0u;
+  audioKeyRequestBytes_ = 0u;
+  audioKeyBytes_ = 0u;
+  audioKeyLastCommand_ = 0u;
+  audioKeyError0_ = 0u;
+  audioKeyError1_ = 0u;
+  audioKeyPending_ = false;
+  productInfoPackets_ = 0u;
+  productInfoBytes_ = 0u;
+  productInfoHash_ = 0u;
+  productInfoXmlLike_ = false;
+  strlcpy(productInfoType_, "none", sizeof(productInfoType_));
+  strlcpy(productInfoCatalogue_, "none", sizeof(productInfoCatalogue_));
+  strlcpy(productInfoPlayerLicense_, "none", sizeof(productInfoPlayerLicense_));
+  strlcpy(productInfoHeadFiles_, "none", sizeof(productInfoHeadFiles_));
+  memset(headFileTemplate_, 0, sizeof(headFileTemplate_));
+  strlcpy(headFileScheme_, "none", sizeof(headFileScheme_));
+  mediaHeadAttempts_ = 0u;
+  mediaHeadSuccesses_ = 0u;
+  mediaHeadSkipped_ = 0u;
+  mediaHeadHttpCode_ = 0;
+  mediaHeadContentLength_ = -1;
+  mediaHeadBytes_ = 0u;
+  mediaHeadRangeHonored_ = false;
+  mediaHeadOggCapture_ = false;
+  mediaHeadUnsupportedScheme_ = 0u;
+  mediaHeadFetchedForTrack_ = false;
+  setMediaHeadError("none");
+  apStreamAttempts_ = 0u;
+  apStreamSuccesses_ = 0u;
+  apStreamFailures_ = 0u;
+  apStreamTimeouts_ = 0u;
+  apStreamProtocolErrors_ = 0u;
+  apStreamStalePackets_ = 0u;
+  apStreamTrackChangeCancels_ = 0u;
+  apStreamNextChannelId_ = 0u;
+  apStreamChannelId_ = 0u;
+  apStreamRequestedAtMs_ = 0u;
+  apStreamRequestBytes_ = 0u;
+  apStreamResponsePackets_ = 0u;
+  apStreamLastCommand_ = 0u;
+  apStreamFailureCode_ = 0u;
+  apStreamHeaderCount_ = 0u;
+  apStreamHeaderBytes_ = 0u;
+  apStreamReportedFileBytes_ = 0u;
+  apStreamDataPackets_ = 0u;
+  apStreamDataBytes_ = 0u;
+  apStreamCandidateFormat_ = -1;
+  apStreamHeadersComplete_ = false;
+  apStreamPending_ = false;
+  apStreamAttemptedForTrack_ = false;
+  setApStreamError("none");
   reconnectAttempts_ = 0u;
   reconnectSuccesses_ = 0u;
   lastDurationMs_ = 0u;
@@ -1460,6 +1847,51 @@ bool SpotifySessionProbe::runOneSession(bool reconnecting) {
   spircLocalActive_ = false;
   spircTransferNotifyMercurySequence_ = ~static_cast<uint64_t>(0);
   metadataMercurySequence_ = ~static_cast<uint64_t>(0);
+  audioKeyPending_ = false;
+  audioKeyPendingSequence_ = 0u;
+  audioKeyRequestedAtMs_ = 0u;
+  memset(audioKeyCandidateFileIds_, 0, sizeof(audioKeyCandidateFileIds_));
+  for (uint8_t i = 0u; i < MAX_AUDIO_KEY_CANDIDATES; ++i) audioKeyCandidateFormats_[i] = -1;
+  memset(audioKeyCandidateResultCommand_, 0, sizeof(audioKeyCandidateResultCommand_));
+  memset(audioKeyCandidateError0_, 0, sizeof(audioKeyCandidateError0_));
+  memset(audioKeyCandidateError1_, 0, sizeof(audioKeyCandidateError1_));
+  memset(audioKeyCandidateTimedOut_, 0, sizeof(audioKeyCandidateTimedOut_));
+  audioKeyCandidateCount_ = 0u;
+  audioKeyCandidateIndex_ = 0u;
+  audioKeyCandidateAdvances_ = 0u;
+  audioKeyCandidateTruncated_ = 0u;
+  productInfoBytes_ = 0u;
+  productInfoHash_ = 0u;
+  productInfoXmlLike_ = false;
+  strlcpy(productInfoType_, "none", sizeof(productInfoType_));
+  strlcpy(productInfoCatalogue_, "none", sizeof(productInfoCatalogue_));
+  strlcpy(productInfoPlayerLicense_, "none", sizeof(productInfoPlayerLicense_));
+  strlcpy(productInfoHeadFiles_, "none", sizeof(productInfoHeadFiles_));
+  memset(headFileTemplate_, 0, sizeof(headFileTemplate_));
+  strlcpy(headFileScheme_, "none", sizeof(headFileScheme_));
+  mediaHeadHttpCode_ = 0;
+  mediaHeadContentLength_ = -1;
+  mediaHeadBytes_ = 0u;
+  mediaHeadRangeHonored_ = false;
+  mediaHeadOggCapture_ = false;
+  mediaHeadFetchedForTrack_ = false;
+  setMediaHeadError("none");
+  apStreamChannelId_ = 0u;
+  apStreamRequestedAtMs_ = 0u;
+  apStreamRequestBytes_ = 0u;
+  apStreamResponsePackets_ = 0u;
+  apStreamLastCommand_ = 0u;
+  apStreamFailureCode_ = 0u;
+  apStreamHeaderCount_ = 0u;
+  apStreamHeaderBytes_ = 0u;
+  apStreamReportedFileBytes_ = 0u;
+  apStreamDataPackets_ = 0u;
+  apStreamDataBytes_ = 0u;
+  apStreamCandidateFormat_ = -1;
+  apStreamHeadersComplete_ = false;
+  apStreamPending_ = false;
+  apStreamAttemptedForTrack_ = false;
+  setApStreamError("none");
   sessionConnectedMs_ = millis();
   lastRxMs_ = sessionConnectedMs_;
   updateStackWatermark();
@@ -1530,6 +1962,19 @@ bool SpotifySessionProbe::runOneSession(bool reconnecting) {
     return true;
   };
 
+  auto clearAudioKeyCandidates = [&]() {
+    memset(audioKeyCandidateFileIds_, 0, sizeof(audioKeyCandidateFileIds_));
+    for (uint8_t i = 0u; i < MAX_AUDIO_KEY_CANDIDATES; ++i) audioKeyCandidateFormats_[i] = -1;
+    memset(audioKeyCandidateResultCommand_, 0, sizeof(audioKeyCandidateResultCommand_));
+    memset(audioKeyCandidateError0_, 0, sizeof(audioKeyCandidateError0_));
+    memset(audioKeyCandidateError1_, 0, sizeof(audioKeyCandidateError1_));
+    memset(audioKeyCandidateTimedOut_, 0, sizeof(audioKeyCandidateTimedOut_));
+    audioKeyCandidateCount_ = 0u;
+    audioKeyCandidateIndex_ = 0u;
+    audioKeyCandidateAdvances_ = 0u;
+    audioKeyCandidateTruncated_ = 0u;
+  };
+
   auto sendTrackMetadataRequest = [&](const SpircFrameInfo& remote) -> bool {
     if (remote.selectedTrackGid.empty()) {
       setError("SPIRC Load selected track has no GID");
@@ -1540,10 +1985,64 @@ bool SpotifySessionProbe::runOneSession(bool reconnecting) {
       setError("SPIRC Load selected track GID length unsupported");
       return true;
     }
-    if (metadataMercurySequence_ != ~static_cast<uint64_t>(0)) return true;
+
+    const bool haveSelectedTrack = trackRefGidHex_[0] != '\0';
+    const bool sameTrack = haveSelectedTrack &&
+        memcmp(selectedTrackGid_, remote.selectedTrackGid.data(), TRACK_GID_BYTES) == 0;
+
+    // A duplicate Load for the same track can leave an in-flight metadata request alone.
+    // A real track change supersedes both metadata and audio-key work from the old GID.
+    if (metadataMercurySequence_ != ~static_cast<uint64_t>(0)) {
+      if (sameTrack) return true;
+      metadataMercurySequence_ = ~static_cast<uint64_t>(0);
+    }
+    if (sameTrack && (audioKeyPending_ || audioKeyCandidateCount_ != 0u)) {
+      return true;
+    }
+    if (!sameTrack) {
+      if (audioKeyPending_) {
+        audioKeyPending_ = false;
+        audioKeyPendingSequence_ = 0u;
+        audioKeyRequestedAtMs_ = 0u;
+        ++audioKeyTrackChangeCancels_;
+      }
+      clearAudioKeyCandidates();
+      mediaHeadFetchedForTrack_ = false;
+      mediaHeadHttpCode_ = 0;
+      mediaHeadContentLength_ = -1;
+      mediaHeadBytes_ = 0u;
+      mediaHeadRangeHonored_ = false;
+      mediaHeadOggCapture_ = false;
+      setMediaHeadError("none");
+      if (apStreamPending_) ++apStreamTrackChangeCancels_;
+      apStreamChannelId_ = 0u;
+      apStreamRequestedAtMs_ = 0u;
+      apStreamRequestBytes_ = 0u;
+      apStreamResponsePackets_ = 0u;
+      apStreamLastCommand_ = 0u;
+      apStreamFailureCode_ = 0u;
+      apStreamHeaderCount_ = 0u;
+      apStreamHeaderBytes_ = 0u;
+      apStreamReportedFileBytes_ = 0u;
+      apStreamDataPackets_ = 0u;
+      apStreamDataBytes_ = 0u;
+      apStreamCandidateFormat_ = -1;
+      apStreamHeadersComplete_ = false;
+      apStreamPending_ = false;
+      apStreamAttemptedForTrack_ = false;
+      setApStreamError("none");
+    }
+
     trackRefIndex_ = remote.selectedTrackIndex;
     strlcpy(trackRefGidHex_, gidHex.c_str(), sizeof(trackRefGidHex_));
     strlcpy(trackRefUri_, remote.selectedTrackUri.c_str(), sizeof(trackRefUri_));
+    memcpy(selectedTrackGid_, remote.selectedTrackGid.data(), TRACK_GID_BYTES);
+    memset(selectedAudioFileId_, 0, sizeof(selectedAudioFileId_));
+    memset(audioKey_, 0, sizeof(audioKey_));
+    audioKeyBytes_ = 0u;
+    audioKeyLastCommand_ = 0u;
+    audioKeyError0_ = 0u;
+    audioKeyError1_ = 0u;
     const String metadataUri = String(TRACK_METADATA_PREFIX) + gidHex;
     metadataMercurySequence_ = mercurySequence_++;
     const std::vector<uint8_t> request = buildMercuryRequest(
@@ -1559,12 +2058,130 @@ bool SpotifySessionProbe::runOneSession(bool reconnecting) {
     return true;
   };
 
+  auto sendAudioKeyCandidate = [&](uint8_t candidateIndex) -> bool {
+    if (candidateIndex >= audioKeyCandidateCount_ || candidateIndex >= MAX_AUDIO_KEY_CANDIDATES) {
+      ++audioKeyErrors_;
+      ++audioKeyProtocolErrors_;
+      setError("audio key candidate index invalid");
+      return true;
+    }
+    if (audioKeyPending_) return true;
+
+    audioKeyCandidateIndex_ = candidateIndex;
+    memcpy(selectedAudioFileId_, audioKeyCandidateFileIds_[candidateIndex], AUDIO_FILE_ID_BYTES);
+    memset(audioKey_, 0, sizeof(audioKey_));
+    audioKeyBytes_ = 0u;
+    audioKeyError0_ = 0u;
+    audioKeyError1_ = 0u;
+    const uint32_t sequence = audioKeyNextSequence_++;
+    const std::vector<uint8_t> request = buildAudioKeyRequest(
+        selectedAudioFileId_, selectedTrackGid_, sequence);
+    audioKeyRequestBytes_ = request.size();
+    audioKeyLastSequence_ = sequence;
+    audioKeyPendingSequence_ = sequence;
+    ++audioKeyRequests_;
+    if (request.size() != AUDIO_FILE_ID_BYTES + TRACK_GID_BYTES + 6u ||
+        !sendShannonPacket(tcp, sendCipher, sendNonce, REQUEST_KEY_COMMAND, request, IO_TIMEOUT_MS)) {
+      audioKeyPending_ = false;
+      audioKeyPendingSequence_ = 0u;
+      ++audioKeyErrors_;
+      ++audioKeyProtocolErrors_;
+      setError("Spotify audio key RequestKey write failed");
+      return false;
+    }
+    audioKeyPending_ = true;
+    audioKeyRequestedAtMs_ = millis();
+    ++txPackets_;
+    return true;
+  };
+
+  auto advanceAudioKeyCandidate = [&]() -> bool {
+    if (audioKeyCandidateCount_ == 0u ||
+        static_cast<uint8_t>(audioKeyCandidateIndex_ + 1u) >= audioKeyCandidateCount_) {
+      return true;
+    }
+    ++audioKeyCandidateAdvances_;
+    return sendAudioKeyCandidate(static_cast<uint8_t>(audioKeyCandidateIndex_ + 1u));
+  };
+
+  auto startApStreamCanary = [&]() -> bool {
+    if (apStreamAttemptedForTrack_) return true;
+    apStreamAttemptedForTrack_ = true;
+    ++apStreamAttempts_;
+    apStreamChannelId_ = apStreamNextChannelId_++;
+    apStreamRequestedAtMs_ = 0u;
+    apStreamRequestBytes_ = 0u;
+    apStreamResponsePackets_ = 0u;
+    apStreamLastCommand_ = 0u;
+    apStreamFailureCode_ = 0u;
+    apStreamHeaderCount_ = 0u;
+    apStreamHeaderBytes_ = 0u;
+    apStreamReportedFileBytes_ = 0u;
+    apStreamDataPackets_ = 0u;
+    apStreamDataBytes_ = 0u;
+    apStreamHeadersComplete_ = false;
+    apStreamPending_ = false;
+    setApStreamError("none");
+
+    if (audioKeyCandidateCount_ == 0u) {
+      ++apStreamProtocolErrors_;
+      setApStreamError("no AudioFile candidate for AP stream");
+      return true;
+    }
+    apStreamCandidateFormat_ = audioKeyCandidateFormats_[0];
+    const std::vector<uint8_t> request = buildApStreamChunkRequest(
+        apStreamChannelId_, audioKeyCandidateFileIds_[0], 0u, AP_STREAM_CANARY_WORDS);
+    apStreamRequestBytes_ = request.size();
+    if (request.size() != 46u) {
+      ++apStreamProtocolErrors_;
+      setApStreamError("AP StreamChunk request construction failed");
+      return true;
+    }
+    if (!sendShannonPacket(tcp, sendCipher, sendNonce, STREAM_CHUNK_REQUEST_COMMAND,
+                           request, IO_TIMEOUT_MS)) {
+      ++apStreamFailures_;
+      setApStreamError("AP StreamChunk request write failed");
+      return false;
+    }
+    ++txPackets_;
+    apStreamPending_ = true;
+    apStreamRequestedAtMs_ = millis();
+    return true;
+  };
+
   while (!stopRequested_) {
     if (WiFi.status() != WL_CONNECTED) {
       tcp.stop(); state_ = State::Failed; setError("WiFi lost during Spotify session"); return false;
     }
 
     if (tcp.available() <= 0) {
+      if (audioKeyPending_ && audioKeyRequestedAtMs_ != 0u &&
+          millis() - audioKeyRequestedAtMs_ >= AUDIO_KEY_TIMEOUT_MS) {
+        const uint8_t timedOutCandidate = audioKeyCandidateIndex_;
+        audioKeyPending_ = false;
+        audioKeyPendingSequence_ = 0u;
+        audioKeyRequestedAtMs_ = 0u;
+        ++audioKeyTimeouts_;
+        if (timedOutCandidate < audioKeyCandidateCount_) {
+          audioKeyCandidateTimedOut_[timedOutCandidate] = true;
+        }
+        const bool hasNext = timedOutCandidate + 1u < audioKeyCandidateCount_;
+        setError(hasNext ? "audio key candidate timeout; trying next" :
+                           "audio key candidates exhausted after timeout");
+        if (hasNext && !advanceAudioKeyCandidate()) {
+          tcp.stop(); state_ = State::Failed; return false;
+        }
+        if (!hasNext && !startApStreamCanary()) {
+          tcp.stop(); state_ = State::Failed; return false;
+        }
+      }
+      if (apStreamPending_ && apStreamRequestedAtMs_ != 0u &&
+          millis() - apStreamRequestedAtMs_ >= AP_STREAM_TIMEOUT_MS) {
+        apStreamPending_ = false;
+        apStreamRequestedAtMs_ = 0u;
+        ++apStreamTimeouts_;
+        setApStreamError("AP StreamChunk response timeout");
+      }
       if (!tcp.connected()) {
         tcp.stop(); state_ = State::Failed; setError("Spotify AP closed session"); return false;
       }
@@ -1597,6 +2214,242 @@ bool SpotifySessionProbe::runOneSession(bool reconnecting) {
     if (!liveMacOk) {
       ++shannonMacFailures_;
       tcp.stop(); state_ = State::Failed; setError("Shannon live MAC mismatch"); return false;
+    }
+
+    if (liveCommand == STREAM_CHUNK_SUCCESS_COMMAND ||
+        liveCommand == STREAM_CHUNK_FAILURE_COMMAND) {
+      ++apStreamResponsePackets_;
+      apStreamLastCommand_ = liveCommand;
+      if (payload.size() < 2u) {
+        ++apStreamProtocolErrors_;
+        if (apStreamPending_) {
+          apStreamPending_ = false;
+          apStreamRequestedAtMs_ = 0u;
+        }
+        setApStreamError("AP stream response missing channel id");
+        continue;
+      }
+      const uint16_t channelId = readBe16At(payload, 0u);
+      if (!apStreamAttemptedForTrack_ || channelId != apStreamChannelId_ || !apStreamPending_) {
+        ++apStreamStalePackets_;
+        continue;
+      }
+
+      if (liveCommand == STREAM_CHUNK_FAILURE_COMMAND) {
+        apStreamPending_ = false;
+        apStreamRequestedAtMs_ = 0u;
+        ++apStreamFailures_;
+        if (payload.size() >= 4u) {
+          apStreamFailureCode_ = readBe16At(payload, 2u);
+          setApStreamError("Spotify AP StreamChunk channel error");
+        } else {
+          ++apStreamProtocolErrors_;
+          setApStreamError("AP StreamChunk error payload truncated");
+        }
+        continue;
+      }
+
+      size_t offset = 2u;
+      const bool wasDataState = apStreamHeadersComplete_;
+      bool packetMalformed = false;
+      if (!apStreamHeadersComplete_) {
+        while (offset < payload.size()) {
+          if (payload.size() - offset < 2u) {
+            packetMalformed = true;
+            break;
+          }
+          const uint16_t recordLength = readBe16At(payload, offset);
+          offset += 2u;
+          if (recordLength == 0u) {
+            apStreamHeadersComplete_ = true;
+            break;
+          }
+          if (recordLength < 1u || recordLength > payload.size() - offset) {
+            packetMalformed = true;
+            break;
+          }
+          const uint8_t headerId = payload[offset];
+          const size_t headerDataBytes = static_cast<size_t>(recordLength - 1u);
+          ++apStreamHeaderCount_;
+          apStreamHeaderBytes_ += headerDataBytes;
+          if (headerId == 0x03u && headerDataBytes == 4u) {
+            const uint32_t words = (static_cast<uint32_t>(payload[offset + 1u]) << 24u) |
+                                   (static_cast<uint32_t>(payload[offset + 2u]) << 16u) |
+                                   (static_cast<uint32_t>(payload[offset + 3u]) << 8u) |
+                                   static_cast<uint32_t>(payload[offset + 4u]);
+            if (words <= 0x3fffffffu) apStreamReportedFileBytes_ = words * AP_STREAM_WORD_BYTES;
+          }
+          offset += static_cast<size_t>(recordLength);
+        }
+      }
+
+      if (packetMalformed) {
+        apStreamPending_ = false;
+        apStreamRequestedAtMs_ = 0u;
+        ++apStreamProtocolErrors_;
+        setApStreamError("AP StreamChunk header framing invalid");
+        continue;
+      }
+
+      if (apStreamHeadersComplete_) {
+        if (offset < payload.size()) {
+          ++apStreamDataPackets_;
+          apStreamDataBytes_ += payload.size() - offset;
+          if (apStreamDataBytes_ >= AP_STREAM_CANARY_BYTES) {
+            apStreamPending_ = false;
+            apStreamRequestedAtMs_ = 0u;
+            ++apStreamSuccesses_;
+            setApStreamError("none");
+          }
+        } else if (wasDataState) {
+          apStreamPending_ = false;
+          apStreamRequestedAtMs_ = 0u;
+          if (apStreamDataBytes_ != 0u) {
+            ++apStreamSuccesses_;
+            setApStreamError("none");
+          } else {
+            ++apStreamProtocolErrors_;
+            setApStreamError("AP StreamChunk closed without data");
+          }
+        }
+      }
+      continue;
+    }
+
+    if (liveCommand == AES_KEY_COMMAND || liveCommand == AES_KEY_ERROR_COMMAND) {
+      uint32_t responseSequence = 0u;
+      ++audioKeyResponses_;
+      if (!readBe32Prefix(payload, responseSequence)) {
+        ++audioKeyErrors_;
+        ++audioKeyProtocolErrors_;
+        audioKeyPending_ = false;
+        audioKeyPendingSequence_ = 0u;
+        audioKeyRequestedAtMs_ = 0u;
+        setError("audio key response missing sequence");
+        continue;
+      }
+      if (!audioKeyPending_ || responseSequence != audioKeyPendingSequence_) {
+        ++audioKeyStaleResponses_;
+        continue;
+      }
+
+      const uint8_t candidateIndex = audioKeyCandidateIndex_;
+      audioKeyLastCommand_ = liveCommand;
+      audioKeyLastSequence_ = responseSequence;
+      audioKeyPending_ = false;
+      audioKeyPendingSequence_ = 0u;
+      audioKeyRequestedAtMs_ = 0u;
+      if (candidateIndex < audioKeyCandidateCount_) {
+        audioKeyCandidateResultCommand_[candidateIndex] = liveCommand;
+      }
+
+      if (liveCommand == AES_KEY_COMMAND) {
+        if (payload.size() != 4u + AUDIO_AES_KEY_BYTES) {
+          ++audioKeyErrors_;
+          ++audioKeyProtocolErrors_;
+          audioKeyBytes_ = 0u;
+          memset(audioKey_, 0, sizeof(audioKey_));
+          setError("audio key response length invalid");
+          continue;
+        }
+        memcpy(audioKey_, payload.data() + 4u, AUDIO_AES_KEY_BYTES);
+        audioKeyBytes_ = AUDIO_AES_KEY_BYTES;
+        ++audioKeySuccesses_;
+        setError("none");
+        if (!startApStreamCanary()) {
+          tcp.stop(); state_ = State::Failed; return false;
+        }
+      } else {
+        ++audioKeyErrors_;
+        ++audioKeyServiceRejects_;
+        audioKeyBytes_ = 0u;
+        memset(audioKey_, 0, sizeof(audioKey_));
+        if (payload.size() < 6u) {
+          ++audioKeyProtocolErrors_;
+          setError("audio key error response length invalid");
+          continue;
+        }
+        audioKeyError0_ = payload[4];
+        audioKeyError1_ = payload[5];
+        if (candidateIndex < audioKeyCandidateCount_) {
+          audioKeyCandidateError0_[candidateIndex] = audioKeyError0_;
+          audioKeyCandidateError1_[candidateIndex] = audioKeyError1_;
+        }
+        const bool hasNext = candidateIndex + 1u < audioKeyCandidateCount_;
+        setError(hasNext ? "Spotify AesKeyError; trying next audio file" :
+                           "Spotify AesKeyError for all audio files");
+        if (hasNext && !advanceAudioKeyCandidate()) {
+          tcp.stop(); state_ = State::Failed; return false;
+        }
+        if (!hasNext && !startApStreamCanary()) {
+          tcp.stop(); state_ = State::Failed; return false;
+        }
+      }
+      state_ = State::SpircReady;
+      continue;
+    }
+
+    if (liveCommand == PRODUCT_INFO_COMMAND) {
+      ++productInfoPackets_;
+      productInfoBytes_ = payload.size();
+      productInfoHash_ = 2166136261u;  // FNV-1a, diagnostic identity only.
+      for (const uint8_t byte : payload) {
+        productInfoHash_ ^= byte;
+        productInfoHash_ *= 16777619u;
+      }
+      productInfoXmlLike_ = false;
+      for (size_t i = 0u; i < payload.size() && i < 16u; ++i) {
+        const uint8_t byte = payload[i];
+        if (byte == ' ' || byte == '\t' || byte == '\r' || byte == '\n') continue;
+        productInfoXmlLike_ = byte == '<';
+        break;
+      }
+
+      auto copyProductField = [&payload](const char* tag, char* dst, size_t dstSize) {
+        String field;
+        if (SpotifySessionProbe::extractXmlTag(payload, tag, field) && field.length() < dstSize) {
+          strlcpy(dst, field.length() ? field.c_str() : "empty", dstSize);
+        } else {
+          strlcpy(dst, "missing", dstSize);
+        }
+      };
+      copyProductField("type", productInfoType_, sizeof(productInfoType_));
+      copyProductField("catalogue", productInfoCatalogue_, sizeof(productInfoCatalogue_));
+      copyProductField("player-license", productInfoPlayerLicense_, sizeof(productInfoPlayerLicense_));
+      copyProductField("head-files", productInfoHeadFiles_, sizeof(productInfoHeadFiles_));
+
+      String headTemplate;
+      if (extractXmlTag(payload, "head-files-url", headTemplate) && headTemplate.length() != 0u) {
+        if (headTemplate.length() < sizeof(headFileTemplate_)) {
+          strlcpy(headFileTemplate_, headTemplate.c_str(), sizeof(headFileTemplate_));
+          if (headTemplate.startsWith(F("http://"))) {
+            strlcpy(headFileScheme_, "http", sizeof(headFileScheme_));
+          } else if (headTemplate.startsWith(F("https://"))) {
+            strlcpy(headFileScheme_, "https", sizeof(headFileScheme_));
+          } else {
+            strlcpy(headFileScheme_, "other", sizeof(headFileScheme_));
+          }
+        } else {
+          memset(headFileTemplate_, 0, sizeof(headFileTemplate_));
+          strlcpy(headFileScheme_, "oversize", sizeof(headFileScheme_));
+          setMediaHeadError("head-files-url attribute too long");
+        }
+      } else {
+        memset(headFileTemplate_, 0, sizeof(headFileTemplate_));
+        strlcpy(headFileScheme_, "none", sizeof(headFileScheme_));
+      }
+      if (!mediaHeadFetchedForTrack_ && audioKeyCandidateCount_ != 0u && !audioKeyPending_) {
+        const uint8_t current = audioKeyCandidateIndex_;
+        const bool terminalSuccess = audioKeyBytes_ == AUDIO_AES_KEY_BYTES;
+        const bool terminalReject = current + 1u >= audioKeyCandidateCount_ &&
+            audioKeyCandidateResultCommand_[current] == AES_KEY_ERROR_COMMAND;
+        const bool terminalTimeout = current + 1u >= audioKeyCandidateCount_ &&
+            audioKeyCandidateTimedOut_[current];
+        if ((terminalSuccess || terminalReject || terminalTimeout) && !startApStreamCanary()) {
+          tcp.stop(); state_ = State::Failed; return false;
+        }
+      }
+      continue;
     }
 
     if (liveCommand == PING_COMMAND) {
@@ -1739,7 +2592,53 @@ bool SpotifySessionProbe::runOneSession(bool reconnecting) {
                 const String audioHex = metadata.preferredFileId.empty() ? String() :
                     bytesToHex(metadata.preferredFileId.data(), metadata.preferredFileId.size());
                 strlcpy(metadataPreferredFileIdHex_, audioHex.c_str(), sizeof(metadataPreferredFileIdHex_));
-                setError("none");
+                mediaHeadFetchedForTrack_ = false;
+                mediaHeadHttpCode_ = 0;
+                mediaHeadContentLength_ = -1;
+                mediaHeadBytes_ = 0u;
+                mediaHeadRangeHonored_ = false;
+                mediaHeadOggCapture_ = false;
+                setMediaHeadError("none");
+                clearAudioKeyCandidates();
+                auto addAudioKeyCandidate = [&](const LegacyTrackMetadataInfo::AudioFileCandidate& candidate) {
+                  if (candidate.fileId.size() != AUDIO_FILE_ID_BYTES) return;
+                  for (uint8_t i = 0u; i < audioKeyCandidateCount_; ++i) {
+                    if (memcmp(audioKeyCandidateFileIds_[i], candidate.fileId.data(), AUDIO_FILE_ID_BYTES) == 0) {
+                      return;
+                    }
+                  }
+                  if (audioKeyCandidateCount_ >= MAX_AUDIO_KEY_CANDIDATES) {
+                    ++audioKeyCandidateTruncated_;
+                    return;
+                  }
+                  const uint8_t index = audioKeyCandidateCount_++;
+                  memcpy(audioKeyCandidateFileIds_[index], candidate.fileId.data(), AUDIO_FILE_ID_BYTES);
+                  audioKeyCandidateFormats_[index] = candidate.format;
+                };
+
+                // Keep dev.2i-r1 preference semantics: OGG_VORBIS_160 (format 1)
+                // is first when present. The remaining valid file ids are diagnostic
+                // fallbacks in their metadata order. Duplicate ids are ignored.
+                if (metadata.preferredFileId.size() == AUDIO_FILE_ID_BYTES) {
+                  for (const auto& candidate : metadata.audioFiles) {
+                    if (candidate.fileId == metadata.preferredFileId) {
+                      addAudioKeyCandidate(candidate);
+                      break;
+                    }
+                  }
+                }
+                for (const auto& candidate : metadata.audioFiles) addAudioKeyCandidate(candidate);
+
+                if (audioKeyCandidateCount_ != 0u) {
+                  if (!sendAudioKeyCandidate(0u)) {
+                    tcp.stop(); state_ = State::Failed; return false;
+                  }
+                  setError("none");
+                } else {
+                  ++audioKeyErrors_;
+                  ++audioKeyProtocolErrors_;
+                  setError("track metadata has no valid audio file id");
+                }
               } else {
                 ++metadataParseFailures_;
                 setError("track metadata protobuf parse failed");

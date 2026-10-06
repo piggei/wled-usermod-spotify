@@ -9,8 +9,8 @@
 
 class UsermodSpotifyConnect : public Usermod {
 private:
-  static constexpr const char* USERMOD_VERSION = "0.1.0-dev.2h-track-metadata";
-  static constexpr const char* USERMOD_REVISION = "r1a";
+  static constexpr const char* USERMOD_VERSION = "0.1.0-dev.2l-ap-stream";
+  static constexpr const char* USERMOD_REVISION = "r1";
   bool enabled_ = false;
   bool ready_ = false;
   bool initPending_ = false;
@@ -81,7 +81,7 @@ public:
           request->send(409, FPSTR(CONTENT_TYPE_PLAIN), String(F("Spotify session not started: state=")) + sessionProbe_.stateName() + F(" error=") + sessionProbe_.lastError());
           return;
         }
-        request->send(202, FPSTR(CONTENT_TYPE_PLAIN), F("Spotify AP/Mercury/SPIRC/metadata session started; inspect /json/info"));
+        request->send(202, FPSTR(CONTENT_TYPE_PLAIN), F("Spotify AP/Mercury/SPIRC/media-head session started; inspect /json/info"));
         return;
       }
       if (action == "stop") {
@@ -159,7 +159,7 @@ public:
     if (!enabled_) s.add(F("disabled"));
     else if (!ready_ && selectClockMode() == ClockMode::WaitingSharedClock) s.add(F("waiting: AudioReactive owns clocks but LRCK inactive"));
     else if (!ready_) s.add(String(F("audio not ready: "))+audio_.lastError());
-    else s.add(F("audio ready | Spotify track metadata gate"));
+    else s.add(F("audio ready | Spotify AP stream gate"));
 
     JsonArray z=user.createNestedArray(F("Spotify Zeroconf"));
     z.add(String(F("state=")) + zeroConf_.stateName() + F(" | cpath=") + zeroConf_.cpath());
@@ -244,12 +244,84 @@ public:
     n.add(String(F("Track audioFiles=")) + sessionProbe_.metadataAudioFileCount() + F(" preferredFormat=") +
           sessionProbe_.metadataPreferredFormat() + F(" fileId=") +
           (sessionProbe_.metadataPreferredFileIdHex()[0] ? sessionProbe_.metadataPreferredFileIdHex() : "none"));
+    n.add(String(F("AudioKey requests=")) + sessionProbe_.audioKeyRequests() + F(" responses=") +
+          sessionProbe_.audioKeyResponses() + F(" ok=") + sessionProbe_.audioKeySuccesses() +
+          F(" errors=") + sessionProbe_.audioKeyErrors() + F(" timeouts=") + sessionProbe_.audioKeyTimeouts() +
+          F(" rejects=") + sessionProbe_.audioKeyServiceRejects() + F(" protoErr=") +
+          sessionProbe_.audioKeyProtocolErrors() + F(" stale=") + sessionProbe_.audioKeyStaleResponses() +
+          F(" trackCancel=") + sessionProbe_.audioKeyTrackChangeCancels() + F(" pending=") +
+          (sessionProbe_.audioKeyPending() ? F("yes") : F("no")));
+    n.add(String(F("AudioKey seq=")) + sessionProbe_.audioKeyLastSequence() + F(" requestBytes=") +
+          sessionProbe_.audioKeyRequestBytes() + F(" keyBytes=") + sessionProbe_.audioKeyBytes() +
+          F(" lastCmd=0x") + String(sessionProbe_.audioKeyLastCommand(), HEX) + F(" err=") +
+          sessionProbe_.audioKeyError0() + F(":") + sessionProbe_.audioKeyError1());
+    n.add(String(F("AudioKey candidate=")) +
+          (sessionProbe_.audioKeyCandidateCount() ? sessionProbe_.audioKeyCandidateIndex() + 1u : 0u) + F("/") +
+          sessionProbe_.audioKeyCandidateCount() + F(" format=") + sessionProbe_.audioKeyCandidateFormat() +
+          F(" advances=") + sessionProbe_.audioKeyCandidateAdvances() + F(" truncated=") +
+          sessionProbe_.audioKeyCandidateTruncated());
+    String candidateTrace(F("AudioKey candidates"));
+    for (uint8_t i = 0u; i < sessionProbe_.audioKeyCandidateCount(); ++i) {
+      candidateTrace += F(" [");
+      candidateTrace += String(i);
+      candidateTrace += F(" f=");
+      candidateTrace += String(sessionProbe_.audioKeyCandidateFormatAt(i));
+      if (sessionProbe_.audioKeyCandidateTimedOutAt(i)) {
+        candidateTrace += F(" timeout");
+      } else {
+        const uint8_t cmd = sessionProbe_.audioKeyCandidateResultCommandAt(i);
+        candidateTrace += F(" cmd=0x");
+        candidateTrace += String(cmd, HEX);
+        if (cmd == 0x0eu) {
+          candidateTrace += F(" err=");
+          candidateTrace += String(sessionProbe_.audioKeyCandidateError0At(i));
+          candidateTrace += F(":");
+          candidateTrace += String(sessionProbe_.audioKeyCandidateError1At(i));
+        }
+      }
+      candidateTrace += F("]");
+    }
+    n.add(candidateTrace);
+    n.add(String(F("ProductInfo packets=")) + sessionProbe_.productInfoPackets() + F(" bytes=") +
+          sessionProbe_.productInfoBytes() + F(" hash=0x") + String(sessionProbe_.productInfoHash(), HEX) +
+          F(" xml=") + (sessionProbe_.productInfoXmlLike() ? F("yes") : F("no")) + F(" headUrl=") +
+          (sessionProbe_.headFileTemplateAvailable() ? F("yes") : F("no")) + F(" scheme=") +
+          sessionProbe_.headFileScheme());
+    n.add(String(F("ProductInfo attrs type=")) + sessionProbe_.productInfoType() + F(" catalogue=") +
+          sessionProbe_.productInfoCatalogue() + F(" playerLicense=") + sessionProbe_.productInfoPlayerLicense() +
+          F(" headFiles=") + sessionProbe_.productInfoHeadFiles());
+    n.add(String(F("MediaHead attempts=")) + sessionProbe_.mediaHeadAttempts() + F(" ok=") +
+          sessionProbe_.mediaHeadSuccesses() + F(" skipped=") + sessionProbe_.mediaHeadSkipped() +
+          F(" http=") + sessionProbe_.mediaHeadHttpCode() + F(" len=") +
+          sessionProbe_.mediaHeadContentLength() + F(" bytes=") + sessionProbe_.mediaHeadBytes() +
+          F(" range=") + (sessionProbe_.mediaHeadRangeHonored() ? F("yes") : F("no")) +
+          F(" ogg=") + (sessionProbe_.mediaHeadOggCapture() ? F("yes") : F("no")) +
+          F(" unsupportedScheme=") + sessionProbe_.mediaHeadUnsupportedScheme());
+    n.add(String(F("MediaHead lastError=")) + sessionProbe_.mediaHeadLastError());
+    n.add(String(F("AP Stream attempts=")) + sessionProbe_.apStreamAttempts() + F(" ok=") +
+          sessionProbe_.apStreamSuccesses() + F(" failures=") + sessionProbe_.apStreamFailures() +
+          F(" timeouts=") + sessionProbe_.apStreamTimeouts() + F(" protoErr=") +
+          sessionProbe_.apStreamProtocolErrors() + F(" stale=") + sessionProbe_.apStreamStalePackets() +
+          F(" trackCancel=") + sessionProbe_.apStreamTrackChangeCancels() + F(" pending=") +
+          (sessionProbe_.apStreamPending() ? F("yes") : F("no")));
+    n.add(String(F("AP Stream channel=")) + sessionProbe_.apStreamChannelId() + F(" requestBytes=") +
+          sessionProbe_.apStreamRequestBytes() + F(" requested=") + sessionProbe_.apStreamRequestedBytes() +
+          F(" responsePackets=") + sessionProbe_.apStreamResponsePackets() + F(" lastCmd=0x") +
+          String(sessionProbe_.apStreamLastCommand(), HEX) + F(" failureCode=") +
+          sessionProbe_.apStreamFailureCode());
+    n.add(String(F("AP Stream headers=")) + sessionProbe_.apStreamHeaderCount() + F(" headerBytes=") +
+          sessionProbe_.apStreamHeaderBytes() + F(" headerDone=") +
+          (sessionProbe_.apStreamHeadersComplete() ? F("yes") : F("no")) + F(" fileBytes=") +
+          sessionProbe_.apStreamReportedFileBytes() + F(" dataPackets=") + sessionProbe_.apStreamDataPackets() +
+          F(" dataBytes=") + sessionProbe_.apStreamDataBytes() + F(" format=") +
+          sessionProbe_.apStreamCandidateFormat());
+    n.add(String(F("AP Stream lastError=")) + sessionProbe_.apStreamLastError());
     n.add(String(F("SPIRC remote ident=")) + (sessionProbe_.spircRemoteIdent()[0] ? sessionProbe_.spircRemoteIdent() : "none") +
           F(" name=") + (sessionProbe_.spircRemoteName()[0] ? sessionProbe_.spircRemoteName() : "none"));
     n.add(String(F("AP task attempts=")) + sessionProbe_.attempts() +
           F(" heap=") + sessionProbe_.heapBefore() + F("->") + sessionProbe_.heapAfter() +
           F(" minHeap=") + sessionProbe_.minHeapSeen() + F(" stackMin=") + sessionProbe_.stackMinFree());
-    n.add(F("scope=SPIRC Load -> TrackRef -> Mercury track metadata; audio-key/CDN/decode next gate"));
+    n.add(F("scope=metadata -> RequestKey diagnostics -> ProductInfo headFiles=0 -> AP StreamChunk 4KiB encrypted canary; decrypt/decoder remain closed"));
 
     JsonArray a=user.createNestedArray(F("Spotify audio"));
     const auto t=audio_.telemetry();

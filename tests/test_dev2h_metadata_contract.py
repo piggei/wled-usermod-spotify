@@ -16,15 +16,15 @@ required = [
 for marker in required:
     assert marker in s or marker in h, marker
 
-assert 'USERMOD_VERSION = "0.1.0-dev.2h-track-metadata"' in u
-assert 'USERMOD_REVISION = "r1a"' in u
+assert 'USERMOD_VERSION = "0.1.0-dev.2l-ap-stream"' in u
+assert 'USERMOD_REVISION = "r1"' in u
 assert "static const char* HEX" not in s
 assert "kHexDigits" in s
-assert "Spotify track metadata gate" in u
+assert "Spotify AP stream gate" in u
 assert "Metadata GET attempts=" in u
 assert "TrackRef index=" in u
 assert "Track title=" in u and "Track album=" in u and "Track audioFiles=" in u
-assert "scope=SPIRC Load -> TrackRef -> Mercury track metadata; audio-key/CDN/decode next gate" in u
+assert "ProductInfo headFiles=0 -> AP StreamChunk 4KiB encrypted canary" in u
 
 # TrackRef is the public SPIRC State.track field 27, with gid field 1 and uri field 2.
 assert "field == 27u" in s
@@ -41,8 +41,8 @@ assert "bestCoverSize" in s
 # Preferred audio file policy: OGG_VORBIS_160 enum value 1 when present.
 assert "format == 1u" in s
 
-# Must remain a metadata-only gate.
-for forbidden in ["hm://keymaster/", "storage-resolve", "cdn-resolve", "VorbisDecoder", "AudioKey"]:
+# Metadata acquisition remains independent of later storage/CDN/decode work.
+for forbidden in ["hm://keymaster/", "storage-resolve", "cdn-resolve", "VorbisDecoder"]:
     assert forbidden not in s, forbidden
 assert "enqueuePcm44100" not in s
 print("dev.2h track metadata contract: PASS")

@@ -11,11 +11,11 @@ pcm_h = (root / "spotify" / "SpotifyPcmTestSource.h").read_text()
 pcm_cpp = (root / "spotify" / "SpotifyPcmTestSource.cpp").read_text()
 
 assert lib["name"] == "wled-usermod-spotify"
-assert lib["version"] == "0.1.0-dev.2h-track-metadata-r1a"
+assert lib["version"] == "0.1.0-dev.2l-ap-stream-r1"
 assert not lib.get("dependencies")
 assert lib["build"]["libArchive"] is False
-assert 'USERMOD_VERSION = "0.1.0-dev.2h-track-metadata"' in header
-assert 'USERMOD_REVISION = "r1a"' in header
+assert 'USERMOD_VERSION = "0.1.0-dev.2l-ap-stream"' in header
+assert 'USERMOD_REVISION = "r1"' in header
 assert "toneTestLoop" not in header
 assert "playTestTone" not in header
 assert "audio_.startTestTone" in header
@@ -86,8 +86,8 @@ shan_cpp = (root / "spotify" / "SpotifyShannon.cpp").read_text()
 assert "SpotifySessionProbe sessionProbe_" in header
 assert 'server.on(F("/spotify-session")' in header
 assert 'action == "probe"' in header and 'action == "stop"' in header and 'action == "reset"' in header
-assert "Spotify track metadata gate" in header
-assert "scope=SPIRC Load -> TrackRef -> Mercury track metadata; audio-key/CDN/decode next gate" in header
+assert "Spotify AP stream gate" in header
+assert "ProductInfo headFiles=0 -> AP StreamChunk 4KiB encrypted canary" in header
 assert "xTaskCreate(taskThunk" in sess_cpp
 assert "xTaskCreatePinnedToCore" not in sess_cpp
 assert "http://apresolve.spotify.com/?type=accesspoint" in sess_cpp
@@ -124,6 +124,12 @@ assert "SPIRC hello attempts=" in header and "SPIRC rx=" in header
 assert "Metadata GET attempts=" in header and "Track title=" in header
 assert "TRACK_METADATA_PREFIX = \"hm://metadata/3/track/\"" in sess_cpp
 assert "parseLegacyTrackMetadata" in sess_cpp and "selectedTrackGid" in sess_cpp
+assert "REQUEST_KEY_COMMAND = 0x0Cu" in sess_cpp
+assert "AES_KEY_COMMAND = 0x0Du" in sess_cpp
+assert "AES_KEY_ERROR_COMMAND = 0x0Eu" in sess_cpp
+assert "buildAudioKeyRequest" in sess_cpp and "readBe32Prefix" in sess_cpp
+assert "AudioKey requests=" in header and "keyBytes=" in header
+assert "audioKeyHex" not in header
 assert "persistSkips_" in login_cpp
 print("static checks: PASS")
 

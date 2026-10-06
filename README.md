@@ -1,140 +1,69 @@
 # WLED Spotify Connect Usermod
 
-Current development build: **v0.1.0-dev.2h-track-metadata-r1a**
+Current development build: **v0.1.0-dev.2l-ap-stream-r1**
 
 Target baseline: WLED 17.0.0-devV5 / `ESP32-S3_Waveshare_HUB75` on the Waveshare ESP32-S3 RGB Matrix board.
 
-## Scope of dev.2h-r1a
+## Current status
 
-Compile-only r1a correction: `Arduino.h`/`Print.h` defines the macro `HEX`; the local hexadecimal lookup table in `bytesToHex()` is therefore named `kHexDigits` to avoid a preprocessor collision. Runtime metadata/SPIRC/session behavior is unchanged from r1.
+The qualified control plane remains intact through Zeroconf/LoginBlob, AP handshake/DH/Shannon authentication, persistent Mercury/SPIRC, TrackRef extraction and Mercury track metadata. The Waveshare shared-I2S/ES8311 backend and 44.1 kHz PCM ingress remain frozen.
 
+The dev.2i gate is technically validated but service-blocked for the current account: all four AudioFile candidates returned correlated `AesKeyError 0x0e / 0:1`. A separate current librespot 0.8.0 build on native Windows, using the same account/network, independently authenticated and returned the same `audio key 0 1` on multiple normal tracks. RequestKey is therefore not being rewritten without new evidence.
 
-This build starts from the hardware-qualified **dev.2g-r3** Connect activation path and adds one isolated gate: selected-track metadata acquisition.
+## Closed prerequisite investigations
 
-When Spotify sends a remote SPIRC `Load`, the usermod now:
+`dev.2j-r2` proved from real ProductInfo that this session is premium but has `headFiles=0` and no `head-files-url`; the legacy ProductInfo media-head path is unavailable.
 
-1. keeps the qualified active `Notify` transfer acknowledgement;
-2. extracts the selected `State.track` / `TrackRef` using `playing_track_index` when present;
-3. records its 16-byte GID as 32 lowercase hex characters and its Spotify URI;
-4. sends Mercury `GET hm://metadata/3/track/<gid-hex>`;
-5. records the Mercury status/body size;
-6. decodes the legacy `spotify.metadata.Track` body far enough to expose title, artists, album, duration, album-cover file id and audio-file inventory.
+`dev.2k-r1` then tested native ESP-IDF HTTPS. The real `waveshare_spotify` build reached final linking but failed on undefined `mbedtls_ssl_*` symbols. Symbol inspection found no definition of `mbedtls_ssl_init` in any ESP32-S3 framework archive and no SSL/TLS objects in `libmbedtls.a`. The prebuilt WLED/Tasmota framework contains crypto primitives but not the TLS engine needed by `esp_http_client`/`esp-tls`. This is classified target evidence, not a reason to weaken certificate verification or patch global WLED linkage.
 
-The metadata endpoint is intentionally a hardware gate: if Spotify has changed or disabled this legacy Mercury path, the telemetry will show the exact status/parse result before we add any more protocol layers.
+## Scope of dev.2l-r1
 
-Audio-key acquisition, storage/CDN resolution, media download, decryption, codec decode, album-art download/rendering and Spotify PCM playback remain out of scope. The qualified shared-I2S/PCM backend is unchanged.
+This build tests an independent transport already available inside the authenticated Spotify Access Point session: the historical AP **StreamChunk** channel. After the bounded AudioKey candidate scan reaches a terminal result, the firmware sends one command `0x08` for the preferred AudioFile and requests only **4096 bytes** (1024 protocol words) starting at offset zero. Responses `0x09` and channel errors `0x0a` are correlated by a 16-bit channel id.
+
+The request follows the independently reimplemented historical wire contract:
+
+```text
+channelId BE16
+00 01
+0000 BE16
+00000000 BE32
+00009c40 BE32
+00020000 BE32
+fileId[20]
+offsetWords BE32
+endWords BE32
+```
+
+Total request payload: **46 bytes**. Media response bytes are never retained as a file or exposed through JSON; the canary only parses channel framing, counts headers/data, records historical header `0x03` file-size information when present, and discards data immediately.
+
+No TLS, spclient/Login5, CDN, AES decrypt, Vorbis decoder or PCM connection is added in this build.
+
+## Expected `/json/info` additions
+
+```text
+AP Stream attempts=<n> ok=<n> failures=<n> timeouts=<n> protoErr=<n> stale=<n> trackCancel=<n> pending=<yes|no>
+AP Stream channel=<id> requestBytes=46 requested=4096 responsePackets=<n> lastCmd=0x<cmd> failureCode=<n>
+AP Stream headers=<n> headerBytes=<n> headerDone=<yes|no> fileBytes=<n> dataPackets=<n> dataBytes=<n> format=<metadata format>
+AP Stream lastError=<text>
+```
+
+A reachability PASS is `ok>=1` with `dataBytes>0`. A `0x0a` response is also a useful classified result and should report `failures>=1`, `lastCmd=0xa` and a channel failure code. A timeout remains distinct from a protocol/framing error.
 
 ## Frozen qualified baseline
 
-The following blocks are retained without algorithmic changes:
+Do not alter without new evidence: shared-I2S/ES8311/DMA, Zeroconf/LoginBlob/persistence, AP DH/Shannon/stored-credential auth, keepalive/Mercury/SPIRC, TrackRef/metadata, and the dev.2i RequestKey wire contract/candidate correlation. Future decoded PCM must still enter only through `WavesharePcmOutput::enqueuePcm44100()`.
 
-- Zeroconf discovery, `getInfo`, `addUser` and LoginBlob decode;
-- credential persistence/restore and identical-credential LittleFS write suppression;
-- AP resolve + TCP;
-- ClientHello, DH, Shannon and stored-credential AP authentication;
-- persistent Shannon session, PING/PONG and Mercury remote-user subscription;
-- descendant `hm://remote/3/user/<user>/...` SPIRC dispatch;
-- SPIRC Hello;
-- remote `Load` decode;
-- local active SPIRC `Notify` transfer acknowledgement;
-- 44.1 kHz signed 16-bit stereo PCM ingress;
-- shared-I2S/ES8311/DMA output and volume handling.
+## Build/test workflow
 
-The dev.2g-r3 hardware gate completed a real transfer from the official Spotify app: `load=1`, transfer `Notify sent=1 ack=1`, `localActive=yes`, `macFail=0`, reconnects `0`, and Spotify visibly connected to the Waveshare.
+The source remains an external PlatformIO usermod (`wled-usermod-spotify = symlink://../wled-usermod-spotify`). Tests are data-driven through `tests/release_checks.tsv` and `tests/hardware_checks.tsv`; `tools/test_runner.sh` remains generic. Full WLED/PlatformIO compile and hardware behavior are qualification steps on the target machine.
 
-## Expected dev.2h diagnostics
-
-After selecting **WLED Matrix** and transferring a track, `/json/info` should still show the qualified session/SPIRC path and additionally report lines similar to:
-
-```text
-TrackRef index=... gid=<32 hex chars> uri=spotify:track:...
-Metadata GET attempts=1 responses=1 ok=1 parseFail=0 status=200 bytes=...
-Track title=... artist=...
-Track album=... duration=...ms covers=... coverId=...
-Track audioFiles=... preferredFormat=... fileId=...
-scope=SPIRC Load -> TrackRef -> Mercury track metadata; audio-key/CDN/decode next gate
-```
-
-For this first metadata gate the decisive evidence is:
-
-```text
-Shannon ... macFail=0
-reconnect attempts=0
-TrackRef gid=<32 hex chars>
-Metadata GET attempts>=1
-responses>=1
-status=200
-ok>=1
-parseFail=0
-```
-
-Title, artist, album and duration should then be non-empty/plausible. Cover and audio-file inventories can legitimately vary by content, but when present their file IDs are exposed only as hexadecimal identifiers.
-
-No username, auth blob, DH private key, shared secret, Shannon key or raw SPIRC/metadata payload is printed in `/json/info`.
-
-## External-usermod layout
-
-The source lives only in its external repository, for example:
-
-```text
-~/repo/wled-usermod-spotify/
-```
-
-WLED is only a build tree and does not need to be a Git repository. The intended PlatformIO link is:
-
-```text
-wled-usermod-spotify = symlink://../wled-usermod-spotify
-```
-
-Do not keep a second in-tree copy under `WLED/usermods/`.
-
-## Manual session controls
-
-With a cached credential the session starts automatically after Wi-Fi is ready. Manual controls remain:
-
-```text
-/spotify-session?action=stop
-/spotify-session?action=reset
-/spotify-session?action=probe
-```
-
-## Audio regression gate
-
-The pre-existing qualification endpoint is unchanged:
-
-```text
-/spotify-test?action=start-pcm&tone=1000
-/spotify-test?action=stop
-```
-
-After metadata testing the expected audio diagnostics remain `err=0`, `short=0`, `late=0`, `ringUnderrun=0` with a clean continuous tone.
-
-## Tests
-
-Project-specific checks remain data-driven:
-
-```text
-tests/release_checks.tsv
-tests/hardware_checks.tsv
-```
-
-The generic runner remains:
-
-```text
-tools/test_runner.sh
-```
-
-Adding or changing a project test therefore does not require modifying the update script.
-
-`test_dev2h_metadata_contract.py` guards the new TrackRef/Mercury metadata gate. The earlier AP, Shannon, LoginBlob, persistent-session and SPIRC contract tests remain active as regression guards.
-
-The full WLED/PlatformIO compile and hardware behavior remain qualification steps on the target machine.
+Manual controls remain `/spotify-session?action=stop|reset|probe` and `/spotify-test?action=start-pcm&tone=1000`.
 
 ## Documentation
 
-- `docs/DEV2D_LOGINBLOB.md` — LoginBlob credential gate.
-- `docs/DEV2E_AP_TRANSPORT.md` — AP transport/authentication gate.
-- `docs/DEV2F_MERCURY_SESSION.md` — persistent Shannon/Mercury gate.
-- `docs/DEV2G_SPIRC_ACTIVATION.md` — qualified SPIRC activation/transfer gate.
-- `docs/DEV2H_TRACK_METADATA.md` — current TrackRef/metadata gate.
-- `THIRD_PARTY_NOTICES.md` — protocol/cryptographic provenance notes.
+- `docs/DEV2I_AUDIO_KEY.md` — RequestKey/candidate gate and independent librespot evidence.
+- `docs/DEV2J_MEDIA_HEAD.md` — ProductInfo investigation and confirmed `headFiles=0`.
+- `docs/DEV2K_SPCLIENT_TLS.md` — closed target-native TLS diagnostic.
+- `docs/DEV2L_AP_STREAM.md` — current bounded AP StreamChunk gate.
+- `docs/NEXT_DEV2_CSPOT.md` — staged future media/decode work.
+- `THIRD_PARTY_NOTICES.md` — protocol/cryptographic provenance and licensing notes.
