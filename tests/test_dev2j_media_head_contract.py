@@ -7,9 +7,9 @@ h = (root / "spotify/SpotifySessionProbe.h").read_text()
 ui = (root / "usermod_spotify_connect.h").read_text()
 lib = (root / "library.json").read_text()
 
-assert '"version": "0.1.0-dev.2n-vorbis-r17"' in lib
+assert '"version": "0.1.0-dev.2n-vorbis-r20"' in lib
 assert 'USERMOD_VERSION = "0.1.0-dev.2n-vorbis"' in ui
-assert 'USERMOD_REVISION = "r17"' in ui
+assert 'USERMOD_REVISION = "r20"' in ui
 
 # ProductInfo is retained from dev.2j on the AP live channel. Its tolerant bounded
 # scalar XML tag scanner and exports only selected non-sensitive attributes.

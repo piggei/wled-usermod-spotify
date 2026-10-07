@@ -38,7 +38,7 @@ assert 'AP Stream liveVerify attempts=' in ui
 assert 'hashMatch=' in ui and 'rewind=' in ui and 'decrypt=closed' in ui
 assert 'consumer=closed keyGate=' in ui
 assert 'hard key gate + live decrypt/decoder consumer remain closed' in ui
-assert 'USERMOD_REVISION = "r17"' in ui
+assert 'USERMOD_REVISION = "r20"' in ui
 
 # Public getters exist for the verification result.
 for token in [

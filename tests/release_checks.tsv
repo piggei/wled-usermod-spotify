@@ -34,7 +34,7 @@ VORBIS_R14_IDENTITY	prebuild	required	python_script	tests/test_dev2n_r14_audioke
 VORBIS_DEP_WIRING	prebuild	required	python_script	tests/test_dev2n_r6_micro_ogg_link_bridge.py	exit=0	experimental WLED env preserves WLED core scripts, bridges private includes, and builds the bundled micro-ogg demuxer sources
 THIRD_PARTY_VORBIS	prebuild	required	file_contains	THIRD_PARTY_NOTICES.md	micro-vorbis local decoder dependency	micro-vorbis/Tremor licensing provenance is documented
 BUILD_LINE	prebuild	required	file_contains	usermod_spotify_connect.h	USERMOD_VERSION = "0.1.0-dev.2n-vorbis"	functional development line is dev.2n local Vorbis qualification
-BUILD_REV	prebuild	required	file_contains	usermod_spotify_connect.h	USERMOD_REVISION = "r17"	revision marker is dev.2n-r17
+BUILD_REV	prebuild	required	file_contains	usermod_spotify_connect.h	USERMOD_REVISION = "r20"	revision marker is dev.2n-r20
 ZEROCONF_GATE	prebuild	required	tree_contains	.	spotify-connect	Spotify mDNS discovery service is retained
 AUDIO_POLICY	prebuild	required	tree_contains	.	policy=shared 32-bit slave when owned+clocked	qualified 32-bit shared-I2S policy is retained
 PCM_INGRESS	prebuild	required	tree_contains	.	enqueuePcm44100	cspot-facing 44.1 kHz PCM ingress is present
@@ -100,7 +100,7 @@ SPIRC_MERCURY_SEND	prebuild	required	file_contains	spotify/SpotifySessionProbe.c
 SPIRC_DEVICE_STATE	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp	buildSpircDeviceState	SPIRC Hello advertises device state and capabilities
 SPIRC_REMOTE_PARSE	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp	parseSpircFrame	incoming SPIRC control frames are decoded
 SPIRC_TRANSFER_NOTIFY	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp	buildSpircTransferNotify	Load transfer acknowledgement builds an active SPIRC Notify
-SPIRC_LOAD_ACK	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp	sendSpircTransferNotify(info)	remote Load triggers SPIRC transfer Notify
+SPIRC_LOAD_ACK	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp	sendSpircTransferNotify(loadState,	remote Load triggers SPIRC transfer Notify with explicit position semantics
 SPIRC_LOCAL_ACTIVE	prebuild	required	file_contains	usermod_spotify_connect.h	SPIRC transfer Notify attempts=	transfer acknowledgement telemetry is exposed
 TRACKREF_SELECTED	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp	selectedTrackGid	SPIRC Load selected TrackRef GID is extracted
 TRACK_METADATA_URI	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp	hm://metadata/3/track/	legacy Mercury track metadata endpoint is present
@@ -169,7 +169,7 @@ FW_SPIRC_BLOCKED_NOTIFY	postbuild	required	firmware_contains	firmware	SPIRC bloc
 FW_SPIRC_STATE_QUEUE	postbuild	required	firmware_contains	firmware	SPIRC state tracks=	firmware contains current-SPIRC queue diagnostics
 FW_SPIRC_CONTROL	postbuild	required	firmware_contains	firmware	SPIRC control Notify sent=	firmware contains SPIRC controller command/ack diagnostics
 FW_VERSION	postbuild	required	firmware_contains	firmware	0.1.0-dev.2n-vorbis	firmware contains dev.2n local Vorbis marker
-FW_REVISION	postbuild	required	firmware_contains	firmware	r17	firmware contains dev.2n-r17 revision marker
+FW_REVISION	postbuild	required	firmware_contains	firmware	r20	firmware contains dev.2n-r20 revision marker
 FW_VORBIS_CHUNKED_ENDPOINT	postbuild	required	firmware_contains	firmware	start-vorbis-chunked	firmware contains chunked local Vorbis endpoint marker
 FW_VORBIS_STREAM_TELEMETRY	postbuild	required	firmware_contains	firmware	vorbis stream mode=	firmware contains chunked-input transport telemetry
 FW_VORBIS_AES_ENDPOINT	postbuild	required	firmware_contains	firmware	start-vorbis-aes-chunked	firmware contains AES-CTR chunked local Vorbis endpoint
@@ -266,3 +266,26 @@ FW_AP_CONTINUOUS	postbuild	required	firmware_contains	firmware	AP Continuous sta
 FW_AP_CONT_RING	postbuild	required	firmware_contains	firmware	AP Continuous ring storage=	firmware contains bounded ring telemetry
 FW_AP_CONT_INTEGRITY	postbuild	required	firmware_contains	firmware	AP Continuous integrity producerHash=0x	firmware contains producer/diagnostic-consumer integrity telemetry
 FW_AP_CONT_FENCE	postbuild	required	firmware_contains	firmware	consumer=diagnostic decrypt=closed	firmware preserves live decrypt/decoder fence in r17
+R18_SPIRC_POSITION	prebuild	required	python_script	tests/test_dev2n_r18_spirc_position_contract.py	exit=0	new-track position reset/current-track preservation policy and r17 media freeze are verified
+R18_SPIRC_POSITION_DOC	prebuild	required	file_exists	docs/DEV2N_R18_SPIRC_POSITION.md	present	SPIRC position semantics and hardware procedure documented
+R18_SPIRC_VERIFY_DOC	prebuild	required	file_exists	docs/DEV2N_R18_VERIFICATION.md	present	r18 verification and frozen-path evidence documented
+FW_SPIRC_POSITION_SOURCE	postbuild	required	firmware_contains	firmware	trackResets=	firmware exposes track-change reset telemetry
+FW_R20_SCOPE	postbuild	required	firmware_contains	firmware	scope=dev.2n-r20	firmware contains r20 scope marker
+
+R19_EXT_RING_NATIVE	prebuild	required	python_script	tests/test_dev2n_r19_extended_ring_native.py	exit=0	actual bounded ring passes 1 MiB/256-range, wrap, EOF-tail and invalidation tests
+R19_EXT_CONTRACT	prebuild	required	python_script	tests/test_dev2n_r19_extended_contract.py	exit=0	r17+r18 gates remain frozen while r19 extended transport stays decrypt-closed
+R19_EXT_DOC	prebuild	required	file_exists	docs/DEV2N_R19_EXTENDED_AP_STREAM.md	present	r19 sustained transport, EOF-tail and cancellation procedure documented
+R19_EXT_VERIFY_DOC	prebuild	required	file_exists	docs/DEV2N_R19_VERIFICATION.md	present	r19 host verification and target-build limits documented
+FW_AP_EXT_STATE	postbuild	required	firmware_contains	firmware	AP Extended state=	firmware contains r19 extended transport state
+FW_AP_EXT_SUSTAINED	postbuild	required	firmware_contains	firmware	AP Extended sustained start=	firmware contains 1 MiB sustained progress telemetry
+FW_AP_EXT_RING	postbuild	required	firmware_contains	firmware	AP Extended sustainedRing storage=	firmware contains bounded ring/wrap telemetry
+FW_AP_EXT_TAIL	postbuild	required	firmware_contains	firmware	AP Extended tail start=	firmware contains exact EOF-tail telemetry
+FW_AP_EXT_CANCEL	postbuild	required	firmware_contains	firmware	AP Extended cancel lastStage=	firmware contains track-change cancellation/wipe telemetry
+FW_AP_EXT_FENCE	postbuild	required	firmware_contains	firmware	consumer=diagnostic decrypt=closed	r19 keeps encrypted-byte consumer fence closed
+R20_EOS_POLICY_NATIVE	prebuild	required	python_script	tests/test_dev2n_r20_eos_policy_native.py	exit=0	actual host-testable EOS decision policy covers advance, pause, race latch, repeat and boundary cases
+R20_EOS_CONTRACT	prebuild	required	python_script	tests/test_dev2n_r20_virtual_eos_contract.py	exit=0	r19 media/data plane remains frozen while virtual EOS is idle-socket, one-shot and metadata-generation bound
+R20_EOS_DOC	prebuild	required	file_exists	docs/DEV2N_R20_VIRTUAL_EOS.md	present	r20 virtual EOS behavior and hardware procedure documented
+R20_EOS_VERIFY_DOC	prebuild	required	file_exists	docs/DEV2N_R20_VERIFICATION.md	present	r20 host verification and freeze evidence documented
+FW_SPIRC_EOS	postbuild	required	firmware_contains	firmware	SPIRC EOS source=virtual-clock	firmware contains virtual EOS telemetry
+FW_SPIRC_AUTO_ADVANCE	postbuild	required	firmware_contains	firmware	SPIRC autoAdvance attempts=	firmware contains auto-advance telemetry
+FW_SPIRC_AUTO_NEXT_SOURCE	postbuild	required	firmware_contains	firmware	auto-next-eos	firmware contains automatic-track-boundary source marker

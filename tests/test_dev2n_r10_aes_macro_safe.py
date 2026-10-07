@@ -19,5 +19,5 @@ assert "streamBlock_[kIvBytes]" in hdr
 # Keep the key-size constant equally macro-resistant and preserve the telemetry.
 assert "kKeyBytes = 16u" in hdr
 assert "SpotifyAudioAesCtr::kKeyBytes" in player
-assert 'USERMOD_REVISION = "r17"' in ui
+assert 'USERMOD_REVISION = "r20"' in ui
 print("dev.2n-r10 AES macro-safe identifiers: PASS")

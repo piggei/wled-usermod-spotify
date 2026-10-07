@@ -50,6 +50,8 @@ public:
   uint32_t gapErrors() const { return gapErrors_; }
   uint32_t duplicateErrors() const { return duplicateErrors_; }
   uint32_t producerErrors() const { return producerErrors_; }
+  uint32_t writeWraps() const { return writeWraps_; }
+  uint32_t readWraps() const { return readWraps_; }
   const char* storageName() const;
 
 private:
@@ -76,4 +78,6 @@ private:
   uint32_t gapErrors_ = 0u;
   uint32_t duplicateErrors_ = 0u;
   uint32_t producerErrors_ = 0u;
+  uint32_t writeWraps_ = 0u;
+  uint32_t readWraps_ = 0u;
 };

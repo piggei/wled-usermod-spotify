@@ -11,11 +11,11 @@ pcm_h = (root / "spotify" / "SpotifyPcmTestSource.h").read_text()
 pcm_cpp = (root / "spotify" / "SpotifyPcmTestSource.cpp").read_text()
 
 assert lib["name"] == "wled-usermod-spotify"
-assert lib["version"] == "0.1.0-dev.2n-vorbis-r17"
+assert lib["version"] == "0.1.0-dev.2n-vorbis-r20"
 assert lib.get("dependencies") == [{"owner": "esphome", "name": "micro-vorbis", "version": "^0.1.0", "platforms": "espressif32"}]
 assert lib["build"]["libArchive"] is False
 assert 'USERMOD_VERSION = "0.1.0-dev.2n-vorbis"' in header
-assert 'USERMOD_REVISION = "r17"' in header
+assert 'USERMOD_REVISION = "r20"' in header
 assert "toneTestLoop" not in header
 assert "playTestTone" not in header
 assert "audio_.startTestTone" in header

@@ -8,8 +8,8 @@ override = (root / "platformio_override.example.ini").read_text()
 bridge = (root / "tools" / "platformio_micro_vorbis_compat.py").read_text()
 ui = (root / "usermod_spotify_connect.h").read_text()
 
-assert lib["version"] == "0.1.0-dev.2n-vorbis-r17"
-assert 'USERMOD_REVISION = "r17"' in ui
+assert lib["version"] == "0.1.0-dev.2n-vorbis-r20"
+assert 'USERMOD_REVISION = "r20"' in ui
 assert 'lib_compat_mode = off' in override
 assert 'esphome/micro-vorbis@^0.1.0' in override
 assert '${scripts_defaults.extra_scripts}' in override

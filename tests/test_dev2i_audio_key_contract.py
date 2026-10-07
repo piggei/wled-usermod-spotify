@@ -53,6 +53,6 @@ assert "AudioKey candidates" in ui
 assert "keyBytes=" in ui
 assert "audioKeyHex" not in ui
 assert 'USERMOD_VERSION = "0.1.0-dev.2n-vorbis"' in ui
-assert 'USERMOD_REVISION = "r17"' in ui
+assert 'USERMOD_REVISION = "r20"' in ui
 assert "scope=live AP encrypted canary retained transiently behind MediaChunkSource; hard key gate + live decrypt/decoder consumer remain closed" in ui
 print("dev.2i-r2 audio-key candidate diagnostics contract: PASS")

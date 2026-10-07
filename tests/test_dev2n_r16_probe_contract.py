@@ -42,14 +42,14 @@ assert 'hasParam("action", true)' in post and 'parseGeneration(' in post
 assert 'startNow(' not in post and 'reset(' not in post
 assert 'normalCounters=separate normalLatch=unchanged keyStorage=none consumer=closed' in u
 lib=json.loads((root/'library.json').read_text())
-assert lib['version']=='0.1.0-dev.2n-vorbis-r17'
-assert 'USERMOD_REVISION = "r17"' in u
+assert lib['version']=='0.1.0-dev.2n-vorbis-r20'
+assert 'USERMOD_REVISION = "r20"' in u
 rows=[line.split('\t') for line in (root/'tests/release_checks.tsv').read_text().splitlines() if line and not line.startswith('#')]
 assert all(len(r)==7 for r in rows)
 assert len({r[0] for r in rows})==len(rows)
 runtime='\n'.join(p.read_text() for p in root.rglob('*') if p.suffix in ('.h','.cpp') and 'tests' not in p.relative_to(root).parts)
 for row in rows:
     if row[1]=='postbuild' and row[3]=='firmware_contains': assert row[5] in runtime, row[0]
-    if row[0]=='FW_REVISION': assert row[5]=='r17'
+    if row[0]=='FW_REVISION': assert row[5]=='r20'
     if row[0].startswith('FW_KEY_PROBE_'): assert row[5] in u
-print('r16 feature regression on r17 PASS: 24 unchanged files / 11 frozen blocks, manual-only POST, AP-only send, diagnostic key wipe/fence, consistent postbuild markers')
+print('r16 feature regression on r19 PASS: 24 unchanged files / 11 frozen blocks, manual-only POST, AP-only send, diagnostic key wipe/fence, consistent postbuild markers')

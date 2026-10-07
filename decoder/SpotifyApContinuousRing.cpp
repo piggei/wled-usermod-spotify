@@ -77,6 +77,8 @@ void SpotifyApContinuousRing::reset() {
   gapErrors_ = 0u;
   duplicateErrors_ = 0u;
   producerErrors_ = 0u;
+  writeWraps_ = 0u;
+  readWraps_ = 0u;
 }
 
 void SpotifyApContinuousRing::invalidate() {
@@ -118,11 +120,13 @@ bool SpotifyApContinuousRing::push(uint32_t absoluteOffset, const uint8_t* data,
     return false;
   }
 
+  const size_t oldWritePos = writePos_;
   size_t first = kCapacityBytes - writePos_;
   if (first > len) first = len;
   memcpy(storage_ + writePos_, data, first);
   if (len > first) memcpy(storage_, data + first, len - first);
   writePos_ = (writePos_ + len) % kCapacityBytes;
+  if (len != 0u && oldWritePos + len >= kCapacityBytes) ++writeWraps_;
   usedBytes_ += len;
   producedBytes_ += len;
   expectedOffset_ += static_cast<uint32_t>(len);
@@ -149,6 +153,7 @@ bool SpotifyApContinuousRing::pop(uint8_t* dst, size_t capacity, size_t& written
 
   size_t take = usedBytes_;
   if (take > capacity) take = capacity;
+  const size_t oldReadPos = readPos_;
   size_t first = kCapacityBytes - readPos_;
   if (first > take) first = take;
   memcpy(dst, storage_ + readPos_, first);
@@ -158,6 +163,7 @@ bool SpotifyApContinuousRing::pop(uint8_t* dst, size_t capacity, size_t& written
     memset(storage_, 0, take - first);
   }
   readPos_ = (readPos_ + take) % kCapacityBytes;
+  if (take != 0u && oldReadPos + take >= kCapacityBytes) ++readWraps_;
   usedBytes_ -= take;
   consumedBytes_ += take;
   written = take;

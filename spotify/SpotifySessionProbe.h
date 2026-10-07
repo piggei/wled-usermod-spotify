@@ -6,10 +6,19 @@
 #include <vector>
 #include "SpotifyMetadataAudit.h"
 #include "SpotifyAudioKeyProbe.h"
+#include "SpotifySpircEosPolicy.h"
 
 #include "../decoder/SpotifyApMediaChunkSource.h"
 #include "../decoder/SpotifyApContinuousRing.h"
 
+// dev.2n-r20 adds a virtual end-of-track fallback for the current diagnostic-only
+// player: once validated metadata duration is reached while playing, the AP task
+// advances to the next retained queue item exactly once per metadata generation.
+// Network commands win races because EOS is evaluated only while the socket is idle.
+// r19 encrypted transport and all key/decrypt/decoder/audio paths stay frozen.
+// dev.2n-r18 fixes SPIRC playback-position semantics at media-identity boundaries:
+// a newly selected track starts at zero instead of inheriting a stale controller position.
+// The r17 continuous encrypted transport and all media/decrypt/decoder paths stay frozen.
 // dev.2n-r17 adds a bounded 64 KiB continuous encrypted AP transport diagnostic
 // above the qualified r16 key comparison. It never decrypts or decodes live bytes.
 // dev.2n-r16 added a manual, bounded primary/alternative key comparison. Diagnostic
@@ -235,6 +244,16 @@ public:
   uint32_t spircLastLoadStatus() const { return spircLastLoadStatus_; }
   bool spircPlaybackClockRunning() const { return spircPlaybackClockRunning_; }
   uint32_t spircPlaybackClockBasePositionMs() const { return spircPlaybackClockBasePositionMs_; }
+  const char* spircPlaybackPositionSource() const { return spircPlaybackPositionSource_; }
+  uint32_t spircPlaybackTrackResets() const { return spircPlaybackTrackResets_; }
+  uint32_t spircVirtualEosEvents() const { return spircVirtualEosEvents_; }
+  uint32_t spircAutoAdvanceAttempts() const { return spircAutoAdvanceAttempts_; }
+  uint32_t spircAutoAdvanceSuccesses() const { return spircAutoAdvanceSuccesses_; }
+  uint32_t spircAutoAdvanceBoundaryHolds() const { return spircAutoAdvanceBoundaryHolds_; }
+  uint32_t spircAutoAdvanceRepeatHolds() const { return spircAutoAdvanceRepeatHolds_; }
+  uint32_t spircEosHandledGeneration() const { return spircEosHandledGeneration_; }
+  uint32_t metadataPlaybackGeneration() const { return metadataPlaybackGeneration_; }
+  const char* spircLastEosAction() const { return spircLastEosAction_; }
   const char* spircLastLoadContext() const { return spircLastLoadContext_; }
   const char* spircRemoteIdent() const { return spircRemoteIdent_; }
   const char* spircRemoteName() const { return spircRemoteName_; }
@@ -464,6 +483,85 @@ public:
   int32_t apContinuousCandidateFormat() const { return apContinuousCandidateFormat_; }
   const char* apContinuousLastError() const { return apContinuousLastError_; }
 
+  // dev.2n-r19: extended encrypted transport qualification layered strictly
+  // after the frozen r17 64 KiB stage. No key/decrypt/decoder is connected.
+  const char* apExtendedStateName() const {
+    if (!apExtendedAttemptedForTrack_) return "idle";
+    if (apExtendedComplete_) return "complete";
+    if (apExtendedPending_ || apExtendedStage_ == 1u || apExtendedStage_ == 2u) return "active";
+    return "failed";
+  }
+  const char* apExtendedStageName() const {
+    switch (apExtendedStage_) {
+      case 1u: return "sustained";
+      case 2u: return "tail";
+      case 3u: return "complete";
+      case 4u: return "failed";
+      default: return "idle";
+    }
+  }
+  uint32_t apExtendedAttempts() const { return apExtendedAttempts_; }
+  uint32_t apExtendedSuccesses() const { return apExtendedSuccesses_; }
+  uint32_t apExtendedFailures() const { return apExtendedFailures_; }
+  uint32_t apExtendedTimeouts() const { return apExtendedTimeouts_; }
+  uint32_t apExtendedProtocolErrors() const { return apExtendedProtocolErrors_; }
+  uint32_t apExtendedStalePackets() const { return apExtendedStalePackets_; }
+  uint32_t apExtendedPostCompletePackets() const { return apExtendedPostCompletePackets_; }
+  uint32_t apExtendedTrackChangeCancels() const { return apExtendedTrackChangeCancels_; }
+  uint32_t apExtendedResponsePackets() const { return apExtendedResponsePackets_; }
+  uint8_t apExtendedLastCommand() const { return apExtendedLastCommand_; }
+  uint16_t apExtendedFailureCode() const { return apExtendedFailureCode_; }
+  bool apExtendedPending() const { return apExtendedPending_; }
+  bool apExtendedComplete() const { return apExtendedComplete_; }
+  uint16_t apExtendedChannelId() const { return apExtendedChannelId_; }
+  uint32_t apExtendedReportedFileBytes() const { return apExtendedReportedFileBytes_; }
+  uint16_t apExtendedSustainedRangeCount() const { return AP_EXTENDED_SUSTAINED_RANGE_COUNT; }
+  uint16_t apExtendedSustainedCompletedRanges() const { return apExtendedSustainedCompletedRanges_; }
+  uint32_t apExtendedSustainedStartBytes() const { return AP_EXTENDED_SUSTAINED_START_BYTES; }
+  uint32_t apExtendedCurrentOffsetBytes() const {
+    return apExtendedStage_ == 2u ? apExtendedTailStartBytes_ :
+        AP_EXTENDED_SUSTAINED_START_BYTES +
+        static_cast<uint32_t>(apExtendedSustainedRangeIndex_) *
+            static_cast<uint32_t>(AP_EXTENDED_RANGE_BYTES);
+  }
+  size_t apExtendedRangeBytes() const { return AP_EXTENDED_RANGE_BYTES; }
+  size_t apExtendedSustainedTargetBytes() const { return AP_EXTENDED_SUSTAINED_TARGET_BYTES; }
+  size_t apExtendedSustainedDataBytes() const { return apExtendedSustainedDataBytes_; }
+  size_t apExtendedSustainedConsumerBytes() const { return apExtendedSustainedConsumerBytes_; }
+  uint32_t apExtendedSustainedProducerHash() const { return apExtendedSustainedProducerHash_; }
+  uint32_t apExtendedSustainedConsumerHash() const { return apExtendedSustainedConsumerHash_; }
+  uint32_t apExtendedSustainedConsumerReads() const { return apExtendedSustainedConsumerReads_; }
+  bool apExtendedSustainedHashMatch() const { return apExtendedSustainedHashMatch_; }
+  bool apExtendedSustainedEof() const { return apExtendedSustainedEof_; }
+  size_t apExtendedSustainedRingHighWaterBytes() const { return apExtendedSustainedRingHighWaterBytes_; }
+  size_t apExtendedSustainedRingProducedBytes() const { return apExtendedSustainedRingProducedBytes_; }
+  size_t apExtendedSustainedRingConsumedBytes() const { return apExtendedSustainedRingConsumedBytes_; }
+  uint32_t apExtendedSustainedRingBackpressure() const { return apExtendedSustainedRingBackpressure_; }
+  uint32_t apExtendedSustainedRingGapErrors() const { return apExtendedSustainedRingGapErrors_; }
+  uint32_t apExtendedSustainedRingDuplicateErrors() const { return apExtendedSustainedRingDuplicateErrors_; }
+  uint32_t apExtendedSustainedRingProducerErrors() const { return apExtendedSustainedRingProducerErrors_; }
+  uint32_t apExtendedSustainedRingWriteWraps() const { return apExtendedSustainedRingWriteWraps_; }
+  uint32_t apExtendedSustainedRingReadWraps() const { return apExtendedSustainedRingReadWraps_; }
+  uint32_t apExtendedTailStartBytes() const { return apExtendedTailStartBytes_; }
+  size_t apExtendedTailTargetBytes() const { return apExtendedTailTargetBytes_; }
+  size_t apExtendedTailDataBytes() const { return apExtendedTailDataBytes_; }
+  size_t apExtendedTailConsumerBytes() const { return apExtendedTailConsumerBytes_; }
+  uint32_t apExtendedTailProducerHash() const { return apExtendedTailProducerHash_; }
+  uint32_t apExtendedTailConsumerHash() const { return apExtendedTailConsumerHash_; }
+  bool apExtendedTailHashMatch() const { return apExtendedTailHashMatch_; }
+  bool apExtendedTailEof() const { return apExtendedTailEof_; }
+  bool apExtendedTailExactBoundary() const { return apExtendedTailExactBoundary_; }
+  size_t apExtendedRingCapacityBytes() const { return apExtendedRing_.capacityBytes(); }
+  size_t apExtendedRingBufferedBytes() const { return apExtendedRing_.bufferedBytes(); }
+  size_t apExtendedRingHighWaterBytes() const { return apExtendedRing_.highWaterBytes(); }
+  uint32_t apExtendedRingWriteWraps() const { return apExtendedRing_.writeWraps(); }
+  uint32_t apExtendedRingReadWraps() const { return apExtendedRing_.readWraps(); }
+  const char* apExtendedRingStorage() const { return apExtendedRing_.storageName(); }
+  uint32_t apExtendedLastCancelProducedBytes() const { return apExtendedLastCancelProducedBytes_; }
+  uint32_t apExtendedLastCancelBufferedBytes() const { return apExtendedLastCancelBufferedBytes_; }
+  const char* apExtendedLastCancelStageName() const { return apExtendedLastCancelStage_; }
+  const char* apExtendedLastError() const { return apExtendedLastError_; }
+
   uint32_t reconnectAttempts() const { return reconnectAttempts_; }
   uint32_t reconnectSuccesses() const { return reconnectSuccesses_; }
 
@@ -521,6 +619,14 @@ private:
   static constexpr uint32_t AP_CONTINUOUS_RANGE_WORDS =
       AP_CONTINUOUS_RANGE_BYTES / AP_STREAM_WORD_BYTES;
   static constexpr uint32_t AP_CONTINUOUS_TIMEOUT_MS = 5000u;
+  static constexpr size_t AP_EXTENDED_RANGE_BYTES = 4096u;
+  static constexpr uint32_t AP_EXTENDED_RANGE_WORDS =
+      AP_EXTENDED_RANGE_BYTES / AP_STREAM_WORD_BYTES;
+  static constexpr uint32_t AP_EXTENDED_SUSTAINED_START_BYTES = AP_CONTINUOUS_TARGET_BYTES;
+  static constexpr uint16_t AP_EXTENDED_SUSTAINED_RANGE_COUNT = 256u;
+  static constexpr size_t AP_EXTENDED_SUSTAINED_TARGET_BYTES =
+      AP_EXTENDED_RANGE_BYTES * AP_EXTENDED_SUSTAINED_RANGE_COUNT;
+  static constexpr uint32_t AP_EXTENDED_TIMEOUT_MS = 5000u;
   static constexpr uint32_t MAX_AUTO_RECONNECTS = 5u;
   static constexpr size_t MAX_AP_PLAIN_PACKET = 16384u;
   static constexpr size_t MAX_AP_ENCRYPTED_PACKET = 16384u;
@@ -538,6 +644,9 @@ private:
   void setApStreamError(const char* text);
   void setApContinuousError(const char* text);
   void clearApContinuousTrackState();
+  void setApExtendedError(const char* text);
+  void clearApExtendedTrackState();
+  void snapshotApExtendedSustainedRing();
   void setError(const char* text);
   void setEndpoint(const String& endpoint);
   void setResolverMode(const char* mode);
@@ -720,6 +829,16 @@ private:
   bool spircPlaybackClockRunning_ = false;
   uint32_t spircPlaybackClockBasePositionMs_ = 0u;
   uint32_t spircPlaybackClockStartedAtMs_ = 0u;
+  char spircPlaybackPositionSource_[32] = "none";
+  uint32_t spircPlaybackTrackResets_ = 0u;
+  uint32_t spircVirtualEosEvents_ = 0u;
+  uint32_t spircAutoAdvanceAttempts_ = 0u;
+  uint32_t spircAutoAdvanceSuccesses_ = 0u;
+  uint32_t spircAutoAdvanceBoundaryHolds_ = 0u;
+  uint32_t spircAutoAdvanceRepeatHolds_ = 0u;
+  uint32_t spircEosHandledGeneration_ = 0u;
+  uint32_t metadataPlaybackGeneration_ = 0u;
+  char spircLastEosAction_[24] = "none";
   char spircLastLoadContext_[96] = {0};
   char spircRemoteIdent_[48] = {0};
   char spircRemoteName_[33] = {0};
@@ -896,6 +1015,72 @@ private:
   bool apContinuousAttemptedForTrack_ = false;
   bool apContinuousComplete_ = false;
   char apContinuousLastError_[96] = "none";
+
+  // r19 extended transport state. Stage 1 = sustained 1 MiB starting at 64 KiB;
+  // stage 2 = exact final file tail; stage 3 = complete; stage 4 = failed.
+  uint32_t apExtendedAttempts_ = 0u;
+  uint32_t apExtendedSuccesses_ = 0u;
+  uint32_t apExtendedFailures_ = 0u;
+  uint32_t apExtendedTimeouts_ = 0u;
+  uint32_t apExtendedProtocolErrors_ = 0u;
+  uint32_t apExtendedStalePackets_ = 0u;
+  uint32_t apExtendedPostCompletePackets_ = 0u;
+  uint32_t apExtendedTrackChangeCancels_ = 0u;
+  uint16_t apExtendedChannelId_ = 0u;
+  uint16_t apExtendedLastCompletedChannelId_ = 0xffffu;
+  uint16_t apExtendedFirstChannelId_ = 0u;
+  uint16_t apExtendedAllocatedChannels_ = 0u;
+  uint8_t apExtendedTrackGid_[16] = {0};
+  uint8_t apExtendedStage_ = 0u;
+  uint16_t apExtendedSustainedRangeIndex_ = 0u;
+  uint16_t apExtendedSustainedCompletedRanges_ = 0u;
+  uint32_t apExtendedRequestedAtMs_ = 0u;
+  size_t apExtendedRequestBytes_ = 0u;
+  uint32_t apExtendedResponsePackets_ = 0u;
+  uint8_t apExtendedLastCommand_ = 0u;
+  uint16_t apExtendedFailureCode_ = 0u;
+  uint32_t apExtendedHeaderCount_ = 0u;
+  size_t apExtendedHeaderBytes_ = 0u;
+  uint32_t apExtendedReportedFileBytes_ = 0u;
+  size_t apExtendedCurrentDataBytes_ = 0u;
+  bool apExtendedHeadersComplete_ = false;
+  bool apExtendedPending_ = false;
+  bool apExtendedAttemptedForTrack_ = false;
+  bool apExtendedComplete_ = false;
+  SpotifyApContinuousRing apExtendedRing_;
+
+  size_t apExtendedSustainedDataBytes_ = 0u;
+  uint32_t apExtendedSustainedProducerHash_ = 2166136261u;
+  uint32_t apExtendedSustainedConsumerHash_ = 2166136261u;
+  size_t apExtendedSustainedConsumerBytes_ = 0u;
+  uint32_t apExtendedSustainedConsumerReads_ = 0u;
+  bool apExtendedSustainedHashMatch_ = false;
+  bool apExtendedSustainedEof_ = false;
+  size_t apExtendedSustainedRingHighWaterBytes_ = 0u;
+  size_t apExtendedSustainedRingProducedBytes_ = 0u;
+  size_t apExtendedSustainedRingConsumedBytes_ = 0u;
+  uint32_t apExtendedSustainedRingBackpressure_ = 0u;
+  uint32_t apExtendedSustainedRingGapErrors_ = 0u;
+  uint32_t apExtendedSustainedRingDuplicateErrors_ = 0u;
+  uint32_t apExtendedSustainedRingProducerErrors_ = 0u;
+  uint32_t apExtendedSustainedRingWriteWraps_ = 0u;
+  uint32_t apExtendedSustainedRingReadWraps_ = 0u;
+
+  uint32_t apExtendedTailStartBytes_ = 0u;
+  size_t apExtendedTailTargetBytes_ = 0u;
+  size_t apExtendedTailDataBytes_ = 0u;
+  uint32_t apExtendedTailProducerHash_ = 2166136261u;
+  uint32_t apExtendedTailConsumerHash_ = 2166136261u;
+  size_t apExtendedTailConsumerBytes_ = 0u;
+  uint32_t apExtendedTailConsumerReads_ = 0u;
+  bool apExtendedTailHashMatch_ = false;
+  bool apExtendedTailEof_ = false;
+  bool apExtendedTailExactBoundary_ = false;
+
+  uint32_t apExtendedLastCancelProducedBytes_ = 0u;
+  uint32_t apExtendedLastCancelBufferedBytes_ = 0u;
+  char apExtendedLastCancelStage_[16] = "none";
+  char apExtendedLastError_[96] = "none";
 
   uint32_t reconnectAttempts_ = 0u;
   uint32_t reconnectSuccesses_ = 0u;

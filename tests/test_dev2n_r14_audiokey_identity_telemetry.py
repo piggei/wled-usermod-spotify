@@ -48,6 +48,6 @@ assert 'consumer=closed keyGate=' in ui
 assert 'decrypt=closed' in ui
 assert '../decoder/SpotifyAudioAesCtr' not in cpp
 assert '../decoder/SpotifyVorbisFixturePlayer' not in cpp
-assert 'USERMOD_REVISION = "r17"' in ui
+assert 'USERMOD_REVISION = "r20"' in ui
 
 print('dev.2n-r14 AudioKey identity telemetry measurement-only contract PASS')

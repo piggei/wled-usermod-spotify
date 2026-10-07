@@ -1,69 +1,69 @@
 # WLED Spotify Connect Usermod
 
-Current development build: **v0.1.0-dev.2n-vorbis-r17**
+Current development build: **v0.1.0-dev.2n-vorbis-r20**
 
-`dev.2n-r17` freezes the AudioKey investigation after an independent current
-librespot build reproduced the same `AesKeyError 0:1` for the same primary
-GID/file pairs on Windows. The current go-librespot master was also audited:
-its public PlayPlay plugin remains a stub (`IsSupported() == false`) and falls
-back to the legacy AP AudioKey provider. r17 therefore does **not** mutate the
-RequestKey wire, AP identity, country, candidate selection or the r16 manual
-probe. Instead it advances the independent media-transport workstream with a
-bounded **64 KiB continuous encrypted AP diagnostic**.
+`dev.2n-r20` freezes the hardware-qualified r19 encrypted transport and adds one
+player-lifecycle behavior that was missing in the diagnostic-only receiver: **virtual end-of-track
+auto-advance**. While live decrypt/decoder remain closed, the validated metadata duration drives a
+one-shot EOS fallback. At EOS the AP task selects the next retained queue item, resets position to
+zero, sends a SPIRC control Notify and starts the normal metadata/media sequence for the new track.
+Remote SPIRC commands win races because virtual EOS is evaluated only while the AP socket is idle.
 
-Target baseline: WLED 17.0.0-devV5 / `ESP32-S3_Waveshare_HUB75` on the Waveshare ESP32-S3 RGB Matrix board.
+The r19 1 MiB rolling transport, exact EOF-tail, cancellation/wipe behavior, r18 position semantics,
+AudioKey RequestKey wire and the decrypt/decoder/audio fence are unchanged.
 
-## Current qualified baseline
+## Scope of dev.2n-r20
 
-Hardware has qualified the following components independently. Full Spotify-track playback and the live integration are still separate, unqualified gates:
+r20 adds only virtual EOS/control-plane behavior:
 
-- direct row selection resolves `skip_to.track_uid -> URI -> canonical classic TrackRef`, including the observed GID-only queue;
-- r14 retains `macFail=0`, successful AP StreamChunk transport, ~43 WLED FPS and a clean shared-I2S sink with a 50 ms AP receive poll;
-- r7 decodes the 10,437-byte local Ogg/Vorbis fixture to exactly **88,200 PCM frames at 44.1 kHz stereo**;
-- r8 replays the same fixture as **4096 + 4096 + 2245 byte** deliveries with Ogg pages crossing transport boundaries;
-- r10 decrypts a synthetic encrypted fixture with **AES-128-CTR**, then decodes it through the same chunked Vorbis path to exactly 88,200 frames with `errors=0`, `feedFail=0` and clean audible output;
-- r16 proved six bounded manual primary/alternative key requests were actually sent and all were rejected `0:1`; a freshly built upstream librespot `dev` checkout then reproduced `0:1` for the same primary GID/file pairs and additional tracks on the same Premium account.
+- validated current-track metadata duration arms EOS for that metadata generation;
+- paused/held playback never auto-advances;
+- the EOS decision is one-shot per metadata generation;
+- a queued remote frame is processed before EOS, preventing a local/remote double-next race;
+- a normal queue successor is advertised with `source=auto-next-eos`, position zero and a fresh metadata request;
+- repeat and queue-boundary cases are conservatively held and separately counted;
+- the live decoder EOS source remains closed, so `source=virtual-clock` is explicitly diagnostic/temporary.
 
-The legacy media-key rejection is now treated as an external/open interoperability
-dependency rather than a reason to keep perturbing the qualified WLED RequestKey.
+See [DEV2N_R20_VIRTUAL_EOS.md](docs/DEV2N_R20_VIRTUAL_EOS.md) and
+[DEV2N_R20_VERIFICATION.md](docs/DEV2N_R20_VERIFICATION.md).
 
-## Scope of dev.2n-r17
+## Scope of dev.2n-r19
 
-The existing three-range canary remains frozen and runs first. Only after its
-12,288-byte source gate and `MediaChunkSource` hash/read verification pass does
-r17 start a second diagnostic phase for the same preferred audio file:
+The qualified r17 and r18 behavior remains in place: the three-range canary runs first, the
+64 KiB continuous encrypted diagnostic runs second, and changed SPIRC track identities reset
+the advertised position to zero while Pause/Resume and Seek remain current-track operations.
+
+r19 adds two encrypted-byte-only stages after r17 completes:
 
 ```text
-16 sequential AP StreamChunk ranges x 4096 bytes = 65536 encrypted bytes
-        -> SpotifyApContinuousRing (64 KiB cap, PSRAM preferred)
-        -> diagnostic consumer only
-        -> producer/consumer FNV identity check
+r17 qualified 64 KiB
+        -> r19 sustained: 256 x 4096 B = 1 MiB
+        -> 64 KiB PSRAM-preferred rolling ring
+        -> hash-only diagnostic consumer
+        -> exact final tail ending at AP-reported EOF
         -> no AES key, no decrypt, no Vorbis, no PCM
 ```
 
-The ring enforces exact monotonic absolute offsets, classifies gaps and duplicates,
-never overwrites unread bytes under capacity pressure, wipes bytes as the diagnostic
-consumer drains them and is reset on track/session boundaries. Each received packet
-is drained immediately, so the test exercises a producer/consumer path rather than
-merely retaining a 64 KiB blob.
+The 1 MiB stage begins at byte 65,536, so it extends beyond rather than replacing the r17
+baseline. The bounded ring is drained continuously; 1 MiB traversing a 64 KiB address space
+produces 16 complete read/write position cycles. The final-tail stage computes its start and
+length from the AP-reported file size and verifies that the consumed byte count ends exactly
+at that boundary.
 
-Expected telemetry includes:
+If the selected track changes while r19 is in flight, unread ring storage is invalidated/wiped
+before the new track state is started. Cumulative telemetry records the cancelled stage and
+byte counts; the next track must independently pass canary -> r17 -> r19.
 
-```text
-AP Continuous state=... target=65536 received=... consumed=... ranges=.../16 pending=...
-AP Continuous transport attempts=... ok=... failures=... timeouts=... protoErr=...
-AP Continuous ring storage=psram cap=65536 highWater=... buffered=... produced=... consumed=... backpressure=... gap=... duplicate=...
-AP Continuous integrity producerHash=0x... consumerHash=0x... match=yes eof=yes reads=... consumer=diagnostic decrypt=closed keyGate=blocked
-```
+Expected telemetry includes `AP Extended state=`, `AP Extended sustained`,
+`AP Extended sustainedRing`, `AP Extended tail` and `AP Extended cancel`. See
+[DEV2N_R19_EXTENDED_AP_STREAM.md](docs/DEV2N_R19_EXTENDED_AP_STREAM.md) for the hardware
+procedure and [DEV2N_R19_VERIFICATION.md](docs/DEV2N_R19_VERIFICATION.md) for host gates.
 
-A successful r17 transport run does **not** imply Spotify playback is unlocked.
-It qualifies only sustained ordered encrypted-byte delivery and the bounded consumer
-hand-off. The r16 manual AudioKey page remains available for regression diagnostics,
-but no additional key retries are added automatically.
+The legacy media-key rejection remains an external/open interoperability dependency. r19 does
+not add key retries, PlayPlay code or any mechanism to bypass that boundary. The r16 manual
+AudioKey page is retained only as a regression diagnostic.
 
-Read [DEV2N_R17_CONTINUOUS_AP_STREAM.md](docs/DEV2N_R17_CONTINUOUS_AP_STREAM.md)
-for the exact state machine, failure classifications and hardware procedure. The
-local fixture test endpoints remain available:
+The local fixture test endpoints remain available:
 
 ```text
 /spotify-test?action=start-vorbis
@@ -100,8 +100,14 @@ The full WLED/PlatformIO target compile is a separate required gate because the 
 
 ## Documentation
 
-- `docs/DEV2N_R17_CONTINUOUS_AP_STREAM.md` - current 64 KiB encrypted AP transport diagnostic, bounds and hardware gate.
-- `docs/DEV2N_R17_VERIFICATION.md` - host verification, frozen-path checks and target-build limits.
+- `docs/DEV2N_R18_SPIRC_POSITION.md` - current SPIRC new-track position reset semantics and hardware gate.
+- `docs/DEV2N_R19_EXTENDED_AP_STREAM.md` - r19 1 MiB rolling transport, EOF-tail and cancellation qualification.
+- `docs/DEV2N_R19_VERIFICATION.md` - r19 host verification and frozen-path evidence.
+- `docs/DEV2N_R20_VIRTUAL_EOS.md` - virtual clock EOS and automatic retained-queue advance.
+- `docs/DEV2N_R20_VERIFICATION.md` - r20 host verification, freeze evidence and hardware gate.
+- `docs/DEV2N_R18_VERIFICATION.md` - r18 host verification and frozen-path evidence.
+- `docs/DEV2N_R17_CONTINUOUS_AP_STREAM.md` - qualified 64 KiB encrypted AP transport diagnostic and bounds.
+- `docs/DEV2N_R17_VERIFICATION.md` - retained r17 host verification and target-build limits.
 - `docs/DEV2N_R16_MANUAL_AUDIOKEY_PROBE.md` - retained manual AudioKey experiment, budgets, key wiping and hardware evidence.
 - `docs/DEV2N_R16_VERIFICATION.md` - actual delivery verification and target-build limits.
 - `docs/DEV2N_R15_METADATA_AUDIT.md` - retained metadata parser bounds, field meanings and earlier test sequence.

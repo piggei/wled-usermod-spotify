@@ -8,7 +8,7 @@ cpp = (root / 'decoder/SpotifyVorbisFixturePlayer.cpp').read_text()
 ui = (root / 'usermod_spotify_connect.h').read_text()
 fixture_h = (root / 'decoder/SpotifyVorbisFixture.h').read_text()
 
-assert 'USERMOD_REVISION = "r17"' in ui
+assert 'USERMOD_REVISION = "r20"' in ui
 assert 'action == "start-vorbis-chunked"' in ui
 assert 'startChunked(audio_)' in ui
 assert 'vorbis stream mode=' in ui

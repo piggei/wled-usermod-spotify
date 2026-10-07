@@ -10,7 +10,7 @@ fixture_h = (root / 'decoder' / 'SpotifyVorbisFixture.h').read_text()
 lib = json.loads((root / 'library.json').read_text())
 
 assert 'USERMOD_VERSION = "0.1.0-dev.2n-vorbis"' in ui
-assert 'USERMOD_REVISION = "r17"' in ui
+assert 'USERMOD_REVISION = "r20"' in ui
 assert 'action == "start-vorbis"' in ui
 assert 'vorbisFixture=' in ui
 assert 'vorbis PCM ' in ui

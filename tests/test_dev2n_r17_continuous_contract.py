@@ -62,10 +62,10 @@ for forbidden in ('SpotifyAudioAesCtr', 'SpotifyVorbisFixturePlayer', 'enqueuePc
 
 for token in ('AP Continuous state=', 'AP Continuous ring storage=', 'AP Continuous integrity ',
               'consumer=diagnostic decrypt=closed',
-              'scope=dev.2n-r17 bounded 64KiB encrypted AP transport'):
+              'scope=dev.2n-r20 r19 encrypted transport frozen'):
     assert token in u, token
 
 lib = json.loads((root/'library.json').read_text())
-assert lib['version'] == '0.1.0-dev.2n-vorbis-r17'
-assert 'USERMOD_REVISION = "r17"' in u
-print('r17 continuous transport/freeze PASS: r16 key/audit files + normal key/canary blocks frozen; 64 KiB ring remains decrypt/decoder closed')
+assert lib['version'] == '0.1.0-dev.2n-vorbis-r20'
+assert 'USERMOD_REVISION = "r20"' in u
+print('r17 continuous transport/freeze PASS inside r19: r16 key/audit files + normal key/canary blocks frozen; 64 KiB stage remains decrypt/decoder closed')

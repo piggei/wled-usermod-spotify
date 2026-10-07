@@ -9,9 +9,9 @@ cpp = (root / "spotify/SpotifySessionProbe.cpp").read_text()
 ui = (root / "usermod_spotify_connect.h").read_text()
 manifest = (root / "tests/release_checks.tsv").read_text()
 
-assert lib["version"] == "0.1.0-dev.2n-vorbis-r17"
+assert lib["version"] == "0.1.0-dev.2n-vorbis-r20"
 assert 'USERMOD_VERSION = "0.1.0-dev.2n-vorbis"' in ui
-assert 'USERMOD_REVISION = "r17"' in ui
+assert 'USERMOD_REVISION = "r20"' in ui
 
 # Latch is deliberately narrow: only a complete candidate scan where every result is 0x0e/0:1.
 assert "allRejected01" in cpp
@@ -91,7 +91,7 @@ next_block_end = cpp.index('              state_ = State::SpircReady;', next_blo
 next_block = cpp[next_block_start:next_block_end]
 assert '++spircNextFrames_' in next_block
 assert '++spircPrevFrames_' in next_block
-assert 'sendSpircControlNotify(nextState)' in next_block
+assert 'sendSpircControlNotify(nextState,' in next_block
 assert 'sendTrackMetadataRequest(nextState)' in next_block
 
 # Duplicate/empty Load retries are now actively ACKed with the retained coherent state.
@@ -100,10 +100,10 @@ play = cpp.index('} else if (info.type == SPIRC_PLAY)', load)
 load_block = cpp[load:play]
 assert '++spircEmptyLoadsIgnored_' in load_block
 assert '++spircDuplicateLoadsIgnored_' in load_block
-assert 'sendSpircControlNotify(current)' in load_block
+assert 'sendSpircControlNotify(current,' in load_block
 assert '++spircDuplicateLoadsAcked_' in load_block
-assert load_block.index('++spircEmptyLoadsIgnored_') < load_block.index('sendSpircTransferNotify(info)')
-assert load_block.index('++spircDuplicateLoadsIgnored_') < load_block.index('sendSpircTransferNotify(info)')
+assert load_block.index('++spircEmptyLoadsIgnored_') < load_block.index('sendSpircTransferNotify(loadState,')
+assert load_block.index('++spircDuplicateLoadsIgnored_') < load_block.index('sendSpircTransferNotify(loadState,')
 
 # r5: key unavailability must not force the controller back to Pause.
 # The blocked Notify preserves the current UI play status and position.
@@ -151,7 +151,7 @@ assert 'SPIRC control Notify sent=' in ui
 assert 'commandAcks=' in ui and 'recipientIgnored=' in ui
 assert 'duplicateLoadAcked=' in ui
 
-assert 'USERMOD_REVISION = "r17"' in manifest
+assert 'USERMOD_REVISION = "r20"' in manifest
 
 # r7: current Android field-19 payload is binary ContextPlayerState, not historical JSON.
 assert 'SPIRC_REPLACE = 0x21u' in cpp

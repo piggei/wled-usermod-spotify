@@ -17,7 +17,7 @@ for marker in required:
     assert marker in s or marker in h, marker
 
 assert 'USERMOD_VERSION = "0.1.0-dev.2n-vorbis"' in u
-assert 'USERMOD_REVISION = "r17"' in u
+assert 'USERMOD_REVISION = "r20"' in u
 assert "static const char* HEX" not in s
 assert "kHexDigits" in s
 assert "Spotify media-key hardening" in u

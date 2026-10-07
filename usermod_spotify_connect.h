@@ -11,7 +11,7 @@
 class UsermodSpotifyConnect : public Usermod {
 private:
   static constexpr const char* USERMOD_VERSION = "0.1.0-dev.2n-vorbis";
-  static constexpr const char* USERMOD_REVISION = "r17";
+  static constexpr const char* USERMOD_REVISION = "r20";
   bool enabled_ = false;
   bool ready_ = false;
   bool initPending_ = false;
@@ -535,7 +535,17 @@ public:
           (sessionProbe_.spircContextInflateEncoding()[0] ? sessionProbe_.spircContextInflateEncoding() : "none"));
     n.add(String(F("SPIRC playback status=")) + sessionProbe_.spircLastLoadStatus() + F(" clock=") +
           (sessionProbe_.spircPlaybackClockRunning() ? F("running") : F("held")) + F(" basePos=") +
-          sessionProbe_.spircPlaybackClockBasePositionMs());
+          sessionProbe_.spircPlaybackClockBasePositionMs() + F(" source=") +
+          (sessionProbe_.spircPlaybackPositionSource()[0] ? sessionProbe_.spircPlaybackPositionSource() : "none") +
+          F(" trackResets=") + sessionProbe_.spircPlaybackTrackResets());
+    n.add(String(F("SPIRC EOS source=virtual-clock events=")) + sessionProbe_.spircVirtualEosEvents() +
+          F(" generation=") + sessionProbe_.spircEosHandledGeneration() + F(" metadataGeneration=") +
+          sessionProbe_.metadataPlaybackGeneration() + F(" lastAction=") +
+          (sessionProbe_.spircLastEosAction()[0] ? sessionProbe_.spircLastEosAction() : "none"));
+    n.add(String(F("SPIRC autoAdvance attempts=")) + sessionProbe_.spircAutoAdvanceAttempts() +
+          F(" ok=") + sessionProbe_.spircAutoAdvanceSuccesses() + F(" boundary=") +
+          sessionProbe_.spircAutoAdvanceBoundaryHolds() + F(" repeatHold=") +
+          sessionProbe_.spircAutoAdvanceRepeatHolds());
     n.add(String(F("SPIRC state tracks=")) + sessionProbe_.spircStateTrackRefCount() +
           F(" trackBytes=") + sessionProbe_.spircStateTrackRefBytes() + F(" truncated=") +
           sessionProbe_.spircStateTrackRefsTruncated() + F(" fallbackRefs=") +
@@ -719,13 +729,66 @@ public:
           sessionProbe_.apContinuousConsumerReads() + F(" consumer=diagnostic decrypt=closed keyGate=") +
           (sessionProbe_.apStreamLiveKeyGateEligible() ? F("eligible") : F("blocked")));
     n.add(String(F("AP Continuous lastError=")) + sessionProbe_.apContinuousLastError());
+    n.add(String(F("AP Extended state=")) + sessionProbe_.apExtendedStateName() +
+          F(" stage=") + sessionProbe_.apExtendedStageName() + F(" fileBytes=") +
+          sessionProbe_.apExtendedReportedFileBytes() + F(" pending=") +
+          (sessionProbe_.apExtendedPending() ? F("yes") : F("no")));
+    n.add(String(F("AP Extended sustained start=")) + sessionProbe_.apExtendedSustainedStartBytes() +
+          F(" target=") + sessionProbe_.apExtendedSustainedTargetBytes() + F(" received=") +
+          sessionProbe_.apExtendedSustainedDataBytes() + F(" consumed=") +
+          sessionProbe_.apExtendedSustainedConsumerBytes() + F(" ranges=") +
+          sessionProbe_.apExtendedSustainedCompletedRanges() + F("/") +
+          sessionProbe_.apExtendedSustainedRangeCount() + F(" hashMatch=") +
+          (sessionProbe_.apExtendedSustainedHashMatch() ? F("yes") : F("no")) + F(" eof=") +
+          (sessionProbe_.apExtendedSustainedEof() ? F("yes") : F("no")));
+    n.add(String(F("AP Extended transport attempts=")) + sessionProbe_.apExtendedAttempts() +
+          F(" ok=") + sessionProbe_.apExtendedSuccesses() + F(" failures=") +
+          sessionProbe_.apExtendedFailures() + F(" timeouts=") + sessionProbe_.apExtendedTimeouts() +
+          F(" protoErr=") + sessionProbe_.apExtendedProtocolErrors() + F(" stale=") +
+          sessionProbe_.apExtendedStalePackets() + F(" postComplete=") +
+          sessionProbe_.apExtendedPostCompletePackets() + F(" trackCancel=") +
+          sessionProbe_.apExtendedTrackChangeCancels() + F(" channel=") +
+          sessionProbe_.apExtendedChannelId() + F(" offset=") +
+          sessionProbe_.apExtendedCurrentOffsetBytes() + F(" rangeBytes=") +
+          sessionProbe_.apExtendedRangeBytes() + F(" responsePackets=") +
+          sessionProbe_.apExtendedResponsePackets() + F(" lastCmd=0x") +
+          String(sessionProbe_.apExtendedLastCommand(), HEX) + F(" failureCode=") +
+          sessionProbe_.apExtendedFailureCode());
+    n.add(String(F("AP Extended sustainedRing storage=")) + sessionProbe_.apExtendedRingStorage() +
+          F(" cap=") + sessionProbe_.apExtendedRingCapacityBytes() + F(" highWater=") +
+          sessionProbe_.apExtendedSustainedRingHighWaterBytes() + F(" produced=") +
+          sessionProbe_.apExtendedSustainedRingProducedBytes() + F(" consumed=") +
+          sessionProbe_.apExtendedSustainedRingConsumedBytes() + F(" writeWraps=") +
+          sessionProbe_.apExtendedSustainedRingWriteWraps() + F(" readWraps=") +
+          sessionProbe_.apExtendedSustainedRingReadWraps() + F(" backpressure=") +
+          sessionProbe_.apExtendedSustainedRingBackpressure() + F(" gap=") +
+          sessionProbe_.apExtendedSustainedRingGapErrors() + F(" duplicate=") +
+          sessionProbe_.apExtendedSustainedRingDuplicateErrors() + F(" producerErr=") +
+          sessionProbe_.apExtendedSustainedRingProducerErrors());
+    n.add(String(F("AP Extended sustainedIntegrity producerHash=0x")) +
+          String(sessionProbe_.apExtendedSustainedProducerHash(), HEX) + F(" consumerHash=0x") +
+          String(sessionProbe_.apExtendedSustainedConsumerHash(), HEX) + F(" reads=") +
+          sessionProbe_.apExtendedSustainedConsumerReads() + F(" consumer=diagnostic decrypt=closed"));
+    n.add(String(F("AP Extended tail start=")) + sessionProbe_.apExtendedTailStartBytes() +
+          F(" target=") + sessionProbe_.apExtendedTailTargetBytes() + F(" received=") +
+          sessionProbe_.apExtendedTailDataBytes() + F(" consumed=") +
+          sessionProbe_.apExtendedTailConsumerBytes() + F(" producerHash=0x") +
+          String(sessionProbe_.apExtendedTailProducerHash(), HEX) + F(" consumerHash=0x") +
+          String(sessionProbe_.apExtendedTailConsumerHash(), HEX) + F(" match=") +
+          (sessionProbe_.apExtendedTailHashMatch() ? F("yes") : F("no")) + F(" eof=") +
+          (sessionProbe_.apExtendedTailEof() ? F("yes") : F("no")) + F(" exactBoundary=") +
+          (sessionProbe_.apExtendedTailExactBoundary() ? F("yes") : F("no")));
+    n.add(String(F("AP Extended cancel lastStage=")) + sessionProbe_.apExtendedLastCancelStageName() +
+          F(" produced=") + sessionProbe_.apExtendedLastCancelProducedBytes() + F(" buffered=") +
+          sessionProbe_.apExtendedLastCancelBufferedBytes() + F(" wipe=yes"));
+    n.add(String(F("AP Extended lastError=")) + sessionProbe_.apExtendedLastError());
     n.add(String(F("SPIRC remote ident=")) + (sessionProbe_.spircRemoteIdent()[0] ? sessionProbe_.spircRemoteIdent() : "none") +
           F(" name=") + (sessionProbe_.spircRemoteName()[0] ? sessionProbe_.spircRemoteName() : "none"));
     n.add(String(F("AP task attempts=")) + sessionProbe_.attempts() +
           F(" heap=") + sessionProbe_.heapBefore() + F("->") + sessionProbe_.heapAfter() +
           F(" minHeap=") + sessionProbe_.minHeapSeen() + F(" stackMin=") + sessionProbe_.stackMinFree());
     n.add(F("scope=live AP encrypted canary retained transiently behind MediaChunkSource; hard key gate + live decrypt/decoder consumer remain closed"));
-    n.add(F("scope=dev.2n-r17 bounded 64KiB encrypted AP transport after frozen canary; consumer=diagnostic decrypt=closed; r16 AudioKey probe retained"));
+    n.add(F("scope=dev.2n-r20 r19 encrypted transport frozen; adds virtual-EOS SPIRC auto-advance while live decoder remains closed; consumer=diagnostic decrypt=closed"));
 
     JsonArray a=user.createNestedArray(F("Spotify audio"));
     const auto t=audio_.telemetry();

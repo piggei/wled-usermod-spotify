@@ -1,10 +1,10 @@
 # dev.2n - local media qualification history
 
-Current build: **dev.2n-r17**, bounded 64 KiB continuous encrypted AP transport
-above the frozen r16 AudioKey comparison. See
+Current build: **dev.2n-r18**. The r17 bounded 64 KiB continuous encrypted AP transport
+is hardware-qualified and frozen; r18 changes only SPIRC track-boundary position semantics.
+See [DEV2N_R18_SPIRC_POSITION.md](DEV2N_R18_SPIRC_POSITION.md) and
 [DEV2N_R17_CONTINUOUS_AP_STREAM.md](DEV2N_R17_CONTINUOUS_AP_STREAM.md).
-The qualified AES/Vorbis/audio files remain unchanged; r17 adds only the separate
-`SpotifyApContinuousRing` encrypted-byte diagnostic adapter. The following sections
+The qualified AES/Vorbis/audio files and `SpotifyApContinuousRing` remain unchanged. The following sections
 preserve local-media qualification history. No live Spotify key reaches the decoder.
 
 # Historical r14 - identity telemetry above the local media baseline

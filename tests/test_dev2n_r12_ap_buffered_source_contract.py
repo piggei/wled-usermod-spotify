@@ -32,5 +32,5 @@ assert 'audioKey_' not in cpp
 assert 'consumer=closed keyGate=' in ui
 assert 'AP Stream liveSource source=ap-encrypted-canary contract=MediaChunkSource ready=' in ui
 assert 'hard key gate + live decrypt/decoder consumer remain closed' in ui
-assert 'USERMOD_REVISION = "r17"' in ui
+assert 'USERMOD_REVISION = "r20"' in ui
 print('dev.2n-r12 transient AP MediaChunkSource/hard-key-gate contract PASS')

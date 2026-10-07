@@ -1888,6 +1888,7 @@ void SpotifySessionProbe::begin() {
   setResolverMode("none");
   setError("none");
   clearApContinuousTrackState();
+  clearApExtendedTrackState();
 }
 
 uint64_t SpotifySessionProbe::clientSpotifyVersion() const { return SPOTIFY_VERSION; }
@@ -1984,6 +1985,76 @@ void SpotifySessionProbe::clearApContinuousTrackState() {
   apContinuousComplete_ = false;
   apContinuousRing_.reset();
   setApContinuousError("none");
+}
+
+void SpotifySessionProbe::setApExtendedError(const char* text) {
+  strlcpy(apExtendedLastError_, text ? text : "unknown", sizeof(apExtendedLastError_));
+}
+
+void SpotifySessionProbe::snapshotApExtendedSustainedRing() {
+  apExtendedSustainedRingHighWaterBytes_ = apExtendedRing_.highWaterBytes();
+  apExtendedSustainedRingProducedBytes_ = apExtendedRing_.producedBytes();
+  apExtendedSustainedRingConsumedBytes_ = apExtendedRing_.consumedBytes();
+  apExtendedSustainedRingBackpressure_ = apExtendedRing_.backpressureEvents();
+  apExtendedSustainedRingGapErrors_ = apExtendedRing_.gapErrors();
+  apExtendedSustainedRingDuplicateErrors_ = apExtendedRing_.duplicateErrors();
+  apExtendedSustainedRingProducerErrors_ = apExtendedRing_.producerErrors();
+  apExtendedSustainedRingWriteWraps_ = apExtendedRing_.writeWraps();
+  apExtendedSustainedRingReadWraps_ = apExtendedRing_.readWraps();
+}
+
+void SpotifySessionProbe::clearApExtendedTrackState() {
+  apExtendedChannelId_ = 0u;
+  apExtendedLastCompletedChannelId_ = 0xffffu;
+  apExtendedFirstChannelId_ = 0u;
+  apExtendedAllocatedChannels_ = 0u;
+  memset(apExtendedTrackGid_, 0, sizeof(apExtendedTrackGid_));
+  apExtendedStage_ = 0u;
+  apExtendedSustainedRangeIndex_ = 0u;
+  apExtendedSustainedCompletedRanges_ = 0u;
+  apExtendedRequestedAtMs_ = 0u;
+  apExtendedRequestBytes_ = 0u;
+  apExtendedResponsePackets_ = 0u;
+  apExtendedLastCommand_ = 0u;
+  apExtendedFailureCode_ = 0u;
+  apExtendedHeaderCount_ = 0u;
+  apExtendedHeaderBytes_ = 0u;
+  apExtendedReportedFileBytes_ = 0u;
+  apExtendedCurrentDataBytes_ = 0u;
+  apExtendedHeadersComplete_ = false;
+  apExtendedPending_ = false;
+  apExtendedAttemptedForTrack_ = false;
+  apExtendedComplete_ = false;
+  apExtendedRing_.reset();
+
+  apExtendedSustainedDataBytes_ = 0u;
+  apExtendedSustainedProducerHash_ = 2166136261u;
+  apExtendedSustainedConsumerHash_ = 2166136261u;
+  apExtendedSustainedConsumerBytes_ = 0u;
+  apExtendedSustainedConsumerReads_ = 0u;
+  apExtendedSustainedHashMatch_ = false;
+  apExtendedSustainedEof_ = false;
+  apExtendedSustainedRingHighWaterBytes_ = 0u;
+  apExtendedSustainedRingProducedBytes_ = 0u;
+  apExtendedSustainedRingConsumedBytes_ = 0u;
+  apExtendedSustainedRingBackpressure_ = 0u;
+  apExtendedSustainedRingGapErrors_ = 0u;
+  apExtendedSustainedRingDuplicateErrors_ = 0u;
+  apExtendedSustainedRingProducerErrors_ = 0u;
+  apExtendedSustainedRingWriteWraps_ = 0u;
+  apExtendedSustainedRingReadWraps_ = 0u;
+
+  apExtendedTailStartBytes_ = 0u;
+  apExtendedTailTargetBytes_ = 0u;
+  apExtendedTailDataBytes_ = 0u;
+  apExtendedTailProducerHash_ = 2166136261u;
+  apExtendedTailConsumerHash_ = 2166136261u;
+  apExtendedTailConsumerBytes_ = 0u;
+  apExtendedTailConsumerReads_ = 0u;
+  apExtendedTailHashMatch_ = false;
+  apExtendedTailEof_ = false;
+  apExtendedTailExactBoundary_ = false;
+  setApExtendedError("none");
 }
 
 bool SpotifySessionProbe::extractXmlTag(const std::vector<uint8_t>& payload,
@@ -2312,6 +2383,16 @@ bool SpotifySessionProbe::startNow(const String& userName, uint8_t authType,
   spircPlaybackClockRunning_ = false;
   spircPlaybackClockBasePositionMs_ = 0u;
   spircPlaybackClockStartedAtMs_ = 0u;
+  strlcpy(spircPlaybackPositionSource_, "none", sizeof(spircPlaybackPositionSource_));
+  spircPlaybackTrackResets_ = 0u;
+  spircVirtualEosEvents_ = 0u;
+  spircAutoAdvanceAttempts_ = 0u;
+  spircAutoAdvanceSuccesses_ = 0u;
+  spircAutoAdvanceBoundaryHolds_ = 0u;
+  spircAutoAdvanceRepeatHolds_ = 0u;
+  spircEosHandledGeneration_ = 0u;
+  metadataPlaybackGeneration_ = 0u;
+  strlcpy(spircLastEosAction_, "none", sizeof(spircLastEosAction_));
   metadataMercurySequence_ = ~static_cast<uint64_t>(0);
   metadataLastStatus_ = 0;
   metadataLastBytes_ = 0u;
@@ -2415,6 +2496,7 @@ bool SpotifySessionProbe::startNow(const String& userName, uint8_t authType,
   apStreamLiveVerifyRewound_ = false;
   setApStreamError("none");
   clearApContinuousTrackState();
+  clearApExtendedTrackState();
   spircHelloBytes_ = 0u;
   lastRxMs_ = 0u;
   heapBefore_ = ESP.getFreeHeap();
@@ -2601,6 +2683,16 @@ void SpotifySessionProbe::reset() {
   spircPlaybackClockRunning_ = false;
   spircPlaybackClockBasePositionMs_ = 0u;
   spircPlaybackClockStartedAtMs_ = 0u;
+  strlcpy(spircPlaybackPositionSource_, "none", sizeof(spircPlaybackPositionSource_));
+  spircPlaybackTrackResets_ = 0u;
+  spircVirtualEosEvents_ = 0u;
+  spircAutoAdvanceAttempts_ = 0u;
+  spircAutoAdvanceSuccesses_ = 0u;
+  spircAutoAdvanceBoundaryHolds_ = 0u;
+  spircAutoAdvanceRepeatHolds_ = 0u;
+  spircEosHandledGeneration_ = 0u;
+  metadataPlaybackGeneration_ = 0u;
+  strlcpy(spircLastEosAction_, "none", sizeof(spircLastEosAction_));
   memset(spircLastLoadContext_, 0, sizeof(spircLastLoadContext_));
   memset(spircRemoteIdent_, 0, sizeof(spircRemoteIdent_));
   memset(spircRemoteName_, 0, sizeof(spircRemoteName_));
@@ -2740,6 +2832,18 @@ void SpotifySessionProbe::reset() {
   apContinuousPostCompletePackets_ = 0u;
   apContinuousTrackChangeCancels_ = 0u;
   clearApContinuousTrackState();
+  apExtendedAttempts_ = 0u;
+  apExtendedSuccesses_ = 0u;
+  apExtendedFailures_ = 0u;
+  apExtendedTimeouts_ = 0u;
+  apExtendedProtocolErrors_ = 0u;
+  apExtendedStalePackets_ = 0u;
+  apExtendedPostCompletePackets_ = 0u;
+  apExtendedTrackChangeCancels_ = 0u;
+  apExtendedLastCancelProducedBytes_ = 0u;
+  apExtendedLastCancelBufferedBytes_ = 0u;
+  strlcpy(apExtendedLastCancelStage_, "none", sizeof(apExtendedLastCancelStage_));
+  clearApExtendedTrackState();
   reconnectAttempts_ = 0u;
   reconnectSuccesses_ = 0u;
   lastDurationMs_ = 0u;
@@ -2833,6 +2937,7 @@ void SpotifySessionProbe::finishTask(uint32_t startedMs) {
   memset(credentialDeviceName_, 0, sizeof(credentialDeviceName_));
   credentialVolume16_ = 0u;
   apContinuousRing_.reset();
+  apExtendedRing_.reset();
   taskStartedMs_ = 0u;
   task_ = nullptr;
 }
@@ -3060,6 +3165,7 @@ bool SpotifySessionProbe::runOneSession(bool reconnecting) {
   apStreamLiveVerifyRewound_ = false;
   setApStreamError("none");
   clearApContinuousTrackState();
+  clearApExtendedTrackState();
   sessionConnectedMs_ = millis();
   lastRxMs_ = sessionConnectedMs_;
   updateStackWatermark();
@@ -3115,13 +3221,14 @@ bool SpotifySessionProbe::runOneSession(bool reconnecting) {
     return position;
   };
 
-  auto setSpircPlaybackClock = [&](uint32_t status, uint32_t positionMs) {
+  auto setSpircPlaybackClock = [&](uint32_t status, uint32_t positionMs, const char* source) {
     spircPlaybackClockBasePositionMs_ = positionMs;
     spircPlaybackClockStartedAtMs_ = millis();
     spircPlaybackClockRunning_ = status == 1u;
+    if (source) strlcpy(spircPlaybackPositionSource_, source, sizeof(spircPlaybackPositionSource_));
   };
 
-  auto sendSpircTransferNotify = [&](const SpircFrameInfo& remote) -> bool {
+  auto sendSpircTransferNotify = [&](const SpircFrameInfo& remote, const char* positionSource) -> bool {
     ++spircTransferNotifyAttempts_;
     const std::vector<uint8_t> frame = buildSpircTransferNotify(
         spircSequence_++, credentialDeviceId_, credentialDeviceName_,
@@ -3174,7 +3281,8 @@ bool SpotifySessionProbe::runOneSession(bool reconnecting) {
     spircLastLoadPositionMs_ = remote.hasPosition ? remote.position :
                                (remote.hasPositionMs ? remote.positionMs : 0u);
     spircLastLoadStatus_ = remote.hasPlayStatus ? remote.playStatus : 0u;
-    setSpircPlaybackClock(spircLastLoadStatus_, spircLastLoadPositionMs_);
+    setSpircPlaybackClock(spircLastLoadStatus_, spircLastLoadPositionMs_, positionSource);
+    if (positionSource && strcmp(positionSource, "reset-track-change") == 0) ++spircPlaybackTrackResets_;
     strlcpy(spircLastLoadContext_, remote.contextUri.c_str(), sizeof(spircLastLoadContext_));
     state_ = State::SpircReady;
     return true;
@@ -3223,7 +3331,7 @@ bool SpotifySessionProbe::runOneSession(bool reconnecting) {
     spircLocalActive_ = true;
     spircLastLoadStatus_ = current.playStatus;
     spircLastLoadPositionMs_ = current.positionMs;
-    setSpircPlaybackClock(current.playStatus, current.positionMs);
+    setSpircPlaybackClock(current.playStatus, current.positionMs, nullptr);
     state_ = State::SpircReady;
     return true;
   };
@@ -3595,7 +3703,7 @@ bool SpotifySessionProbe::runOneSession(bool reconnecting) {
     return false;
   };
 
-  auto sendSpircControlNotify = [&](SpircFrameInfo current) -> bool {
+  auto sendSpircControlNotify = [&](SpircFrameInfo current, const char* positionSource) -> bool {
     const std::vector<uint8_t> frame = buildSpircTransferNotify(
         spircSequence_++, credentialDeviceId_, credentialDeviceName_,
         credentialVolume16_, syncedTimestampMs(), current, current.playStatus);
@@ -3614,7 +3722,8 @@ bool SpotifySessionProbe::runOneSession(bool reconnecting) {
     spircLocalActive_ = true;
     spircLastLoadStatus_ = current.playStatus;
     spircLastLoadPositionMs_ = current.positionMs;
-    setSpircPlaybackClock(current.playStatus, current.positionMs);
+    setSpircPlaybackClock(current.playStatus, current.positionMs, positionSource);
+    if (positionSource && strcmp(positionSource, "reset-track-change") == 0) ++spircPlaybackTrackResets_;
     return true;
   };
 
@@ -3921,6 +4030,22 @@ bool SpotifySessionProbe::runOneSession(bool reconnecting) {
       if (apContinuousPending_ || !apContinuousComplete_) ++apContinuousTrackChangeCancels_;
       clearApContinuousTrackState();
     }
+    if (apExtendedAttemptedForTrack_ &&
+        memcmp(apExtendedTrackGid_, selectedTrackGid_, sizeof(apExtendedTrackGid_)) != 0) {
+      if (apExtendedPending_ || !apExtendedComplete_) {
+        ++apExtendedTrackChangeCancels_;
+        apExtendedLastCancelProducedBytes_ =
+            static_cast<uint32_t>(apExtendedRing_.producedBytes());
+        apExtendedLastCancelBufferedBytes_ =
+            static_cast<uint32_t>(apExtendedRing_.bufferedBytes());
+        strlcpy(apExtendedLastCancelStage_,
+                apExtendedStage_ == 1u ? "sustained" :
+                (apExtendedStage_ == 2u ? "tail" : "other"),
+                sizeof(apExtendedLastCancelStage_));
+        apExtendedRing_.invalidate();
+      }
+      clearApExtendedTrackState();
+    }
 
     // dev.2n-r17: secondary continuous encrypted transport diagnostic. The
     // qualified 3x4096 canary above remains byte-for-byte frozen; only after it
@@ -4027,6 +4152,155 @@ bool SpotifySessionProbe::runOneSession(bool reconnecting) {
       }
     }
 
+    // dev.2n-r19: after the frozen r17 64 KiB stage has passed, qualify a
+    // separate 1 MiB rolling transfer (256 x 4096) through another bounded
+    // 64 KiB ring, then request the exact final tail ending at reported EOF.
+    // This remains hash-only encrypted-byte transport: no media key, decryptor,
+    // Vorbis decoder or PCM consumer is connected.
+    auto drainApExtendedRing = [&]() -> bool {
+      uint8_t scratch[512];
+      while (apExtendedRing_.bufferedBytes() != 0u) {
+        size_t written = 0u;
+        if (!apExtendedRing_.pop(scratch, sizeof(scratch), written) || written == 0u) return false;
+        if (apExtendedStage_ == 1u) {
+          apExtendedSustainedConsumerHash_ =
+              fnv1a32Update(apExtendedSustainedConsumerHash_, scratch, written);
+          apExtendedSustainedConsumerBytes_ += written;
+          ++apExtendedSustainedConsumerReads_;
+        } else if (apExtendedStage_ == 2u) {
+          apExtendedTailConsumerHash_ =
+              fnv1a32Update(apExtendedTailConsumerHash_, scratch, written);
+          apExtendedTailConsumerBytes_ += written;
+          ++apExtendedTailConsumerReads_;
+        } else {
+          return false;
+        }
+      }
+      return true;
+    };
+
+    auto allocateApExtendedChannel = [&]() -> uint16_t {
+      const uint16_t channel = apStreamNextChannelId_++;
+      if (apExtendedAllocatedChannels_ == 0u) apExtendedFirstChannelId_ = channel;
+      if (apExtendedAllocatedChannels_ != 0xffffu) ++apExtendedAllocatedChannels_;
+      return channel;
+    };
+
+    auto sendApExtendedSustainedRange = [&](uint16_t rangeIndex) -> bool {
+      if (rangeIndex >= AP_EXTENDED_SUSTAINED_RANGE_COUNT || audioKeyCandidateCount_ == 0u) return false;
+      apExtendedStage_ = 1u;
+      apExtendedSustainedRangeIndex_ = rangeIndex;
+      apExtendedChannelId_ = allocateApExtendedChannel();
+      apExtendedRequestedAtMs_ = 0u;
+      apExtendedRequestBytes_ = 0u;
+      apExtendedLastCommand_ = 0u;
+      apExtendedFailureCode_ = 0u;
+      apExtendedCurrentDataBytes_ = 0u;
+      apExtendedHeadersComplete_ = false;
+      apExtendedPending_ = false;
+
+      const uint32_t absoluteOffset = AP_EXTENDED_SUSTAINED_START_BYTES +
+          static_cast<uint32_t>(rangeIndex) * static_cast<uint32_t>(AP_EXTENDED_RANGE_BYTES);
+      const std::vector<uint8_t> request = buildApStreamChunkRequest(
+          apExtendedChannelId_, audioKeyCandidateFileIds_[0],
+          absoluteOffset / AP_STREAM_WORD_BYTES, AP_EXTENDED_RANGE_WORDS);
+      apExtendedRequestBytes_ = request.size();
+      ++apExtendedAttempts_;
+      if (request.size() != 46u) {
+        ++apExtendedProtocolErrors_;
+        apExtendedStage_ = 4u;
+        setApExtendedError("AP extended sustained request construction failed");
+        return true;
+      }
+      if (!sendShannonPacket(tcp, sendCipher, sendNonce, STREAM_CHUNK_REQUEST_COMMAND,
+                             request, IO_TIMEOUT_MS)) {
+        ++apExtendedFailures_;
+        apExtendedStage_ = 4u;
+        setApExtendedError("AP extended sustained request write failed");
+        return false;
+      }
+      ++txPackets_;
+      apExtendedPending_ = true;
+      apExtendedRequestedAtMs_ = millis();
+      return true;
+    };
+
+    auto sendApExtendedTail = [&]() -> bool {
+      if (audioKeyCandidateCount_ == 0u || apExtendedTailTargetBytes_ == 0u ||
+          (apExtendedTailTargetBytes_ % AP_STREAM_WORD_BYTES) != 0u) return false;
+      apExtendedStage_ = 2u;
+      apExtendedChannelId_ = allocateApExtendedChannel();
+      apExtendedRequestedAtMs_ = 0u;
+      apExtendedRequestBytes_ = 0u;
+      apExtendedLastCommand_ = 0u;
+      apExtendedFailureCode_ = 0u;
+      apExtendedCurrentDataBytes_ = 0u;
+      apExtendedHeadersComplete_ = false;
+      apExtendedPending_ = false;
+      const std::vector<uint8_t> request = buildApStreamChunkRequest(
+          apExtendedChannelId_, audioKeyCandidateFileIds_[0],
+          apExtendedTailStartBytes_ / AP_STREAM_WORD_BYTES,
+          static_cast<uint32_t>(apExtendedTailTargetBytes_ / AP_STREAM_WORD_BYTES));
+      apExtendedRequestBytes_ = request.size();
+      ++apExtendedAttempts_;
+      if (request.size() != 46u) {
+        ++apExtendedProtocolErrors_;
+        apExtendedStage_ = 4u;
+        setApExtendedError("AP extended tail request construction failed");
+        return true;
+      }
+      if (!sendShannonPacket(tcp, sendCipher, sendNonce, STREAM_CHUNK_REQUEST_COMMAND,
+                             request, IO_TIMEOUT_MS)) {
+        ++apExtendedFailures_;
+        apExtendedStage_ = 4u;
+        setApExtendedError("AP extended tail request write failed");
+        return false;
+      }
+      ++txPackets_;
+      apExtendedPending_ = true;
+      apExtendedRequestedAtMs_ = millis();
+      return true;
+    };
+
+    auto startApExtended = [&]() -> bool {
+      if (apExtendedAttemptedForTrack_) return true;
+      apExtendedAttemptedForTrack_ = true;
+      memcpy(apExtendedTrackGid_, selectedTrackGid_, sizeof(apExtendedTrackGid_));
+      apExtendedStage_ = 1u;
+      apExtendedReportedFileBytes_ =
+          apContinuousReportedFileBytes_ != 0u ? apContinuousReportedFileBytes_ : apStreamReportedFileBytes_;
+      setApExtendedError("none");
+      if (audioKeyCandidateCount_ == 0u) {
+        ++apExtendedProtocolErrors_;
+        apExtendedStage_ = 4u;
+        setApExtendedError("no AudioFile candidate for AP extended transport");
+        return true;
+      }
+      const uint32_t sustainedEnd = AP_EXTENDED_SUSTAINED_START_BYTES +
+          static_cast<uint32_t>(AP_EXTENDED_SUSTAINED_TARGET_BYTES);
+      if (apExtendedReportedFileBytes_ == 0u || apExtendedReportedFileBytes_ < sustainedEnd) {
+        ++apExtendedProtocolErrors_;
+        apExtendedStage_ = 4u;
+        setApExtendedError("audio file too short or size unknown for 1 MiB diagnostic");
+        return true;
+      }
+      if (!apExtendedRing_.begin(AP_EXTENDED_SUSTAINED_START_BYTES,
+                                 AP_EXTENDED_SUSTAINED_TARGET_BYTES)) {
+        ++apExtendedFailures_;
+        apExtendedStage_ = 4u;
+        setApExtendedError("AP extended ring allocation failed");
+        return true;
+      }
+      return sendApExtendedSustainedRange(0u);
+    };
+
+    if (!apExtendedAttemptedForTrack_ && apContinuousComplete_ && !apContinuousPending_) {
+      if (!startApExtended()) {
+        tcp.stop(); state_ = State::Failed;
+        setError("AP extended transport start failed"); return false;
+      }
+    }
+
     if (WiFi.status() != WL_CONNECTED) {
       tcp.stop(); state_ = State::Failed; setError("WiFi lost during Spotify session"); return false;
     }
@@ -4047,6 +4321,65 @@ bool SpotifySessionProbe::runOneSession(bool reconnecting) {
         setError("manual AudioKey diagnostic write failed"); return false;
       }
       ++txPackets_;
+    }
+
+    // dev.2n-r20: virtual EOS is a temporary player-lifecycle source while the
+    // live decrypt/decoder consumer is intentionally closed. Evaluate only while
+    // the AP socket is idle so a simultaneous remote PLAY/NEXT/LOAD frame wins the
+    // race. The metadata generation that supplied duration must still be current;
+    // this prevents stale duration from a prior track from advancing a new identity.
+    if (tcp.available() <= 0 && metadataPlaybackGeneration_ == metadataAuditGeneration_) {
+      const spotify_spirc_eos::Input eosInput{
+          spircLocalActive_,
+          spircPlaybackClockRunning_,
+          spircLastLoadStatus_,
+          currentSpircPositionMs(),
+          metadataDurationMs_,
+          static_cast<size_t>(trackRefIndex_),
+          spircStateTrackRefs_.size(),
+          spircStateHasRepeat_ && spircStateRepeat_,
+          metadataPlaybackGeneration_,
+          spircEosHandledGeneration_};
+      const spotify_spirc_eos::Action eosAction = spotify_spirc_eos::decide(eosInput);
+      if (eosAction != spotify_spirc_eos::Action::None) {
+        spircEosHandledGeneration_ = metadataPlaybackGeneration_;
+        ++spircVirtualEosEvents_;
+        strlcpy(spircLastEosAction_, spotify_spirc_eos::actionName(eosAction),
+                sizeof(spircLastEosAction_));
+
+        if (eosAction == spotify_spirc_eos::Action::Advance) {
+          ++spircAutoAdvanceAttempts_;
+          const uint32_t nextIndex = trackRefIndex_ + 1u;
+          SpircFrameInfo nextState = makeRetainedSpircState(nextIndex, 1u, 0u);
+          if (!sendSpircControlNotify(nextState, "auto-next-eos")) {
+            tcp.stop(); state_ = State::Failed; return false;
+          }
+          if (!sendTrackMetadataRequest(nextState)) {
+            tcp.stop(); state_ = State::Failed; return false;
+          }
+          ++spircAutoAdvanceSuccesses_;
+          // Re-enter the loop immediately: the selected GID has changed, so the
+          // already-qualified r17/r19 per-track transports can cancel/wipe any old
+          // in-flight state before the new metadata response is consumed.
+          continue;
+        }
+
+        if (eosAction == spotify_spirc_eos::Action::HoldRepeat) {
+          ++spircAutoAdvanceRepeatHolds_;
+        } else if (eosAction == spotify_spirc_eos::Action::HoldBoundary) {
+          ++spircAutoAdvanceBoundaryHolds_;
+        }
+      }
+    }
+
+    if (tcp.available() <= 0 && apExtendedPending_ && apExtendedRequestedAtMs_ != 0u &&
+        millis() - apExtendedRequestedAtMs_ >= AP_EXTENDED_TIMEOUT_MS) {
+      apExtendedPending_ = false;
+      apExtendedRequestedAtMs_ = 0u;
+      ++apExtendedTimeouts_;
+      apExtendedRing_.invalidate();
+      apExtendedStage_ = 4u;
+      setApExtendedError("AP extended range response timeout");
     }
 
     if (tcp.available() <= 0 && apContinuousPending_ && apContinuousRequestedAtMs_ != 0u &&
@@ -4124,6 +4457,278 @@ bool SpotifySessionProbe::runOneSession(bool reconnecting) {
     // Consume/quarantine diagnostic replies before the unchanged normal key
     // handler. Received key bytes are wiped here, including late responses.
     if (consumeKeyProbeResponse(liveCommand, payload)) continue;
+
+    // r19 extended transport owns only the contiguous channel-id span allocated
+    // after r17 completes. Packets outside that span fall through to the frozen
+    // r17/canary handlers, preserving their late/stale accounting.
+    if ((liveCommand == STREAM_CHUNK_SUCCESS_COMMAND ||
+         liveCommand == STREAM_CHUNK_FAILURE_COMMAND) &&
+        apExtendedAttemptedForTrack_) {
+      bool extendedOwned = false;
+      uint16_t extendedChannelId = 0u;
+      if (payload.size() >= 2u) {
+        extendedChannelId = readBe16At(payload, 0u);
+        const uint16_t delta = static_cast<uint16_t>(extendedChannelId - apExtendedFirstChannelId_);
+        extendedOwned = apExtendedAllocatedChannels_ != 0u && delta < apExtendedAllocatedChannels_;
+      } else if (apExtendedPending_) {
+        extendedOwned = true;
+      }
+
+      if (extendedOwned) {
+        ++apExtendedResponsePackets_;
+        apExtendedLastCommand_ = liveCommand;
+        if (payload.size() < 2u) {
+          ++apExtendedProtocolErrors_;
+          apExtendedPending_ = false;
+          apExtendedRequestedAtMs_ = 0u;
+          apExtendedRing_.invalidate();
+          apExtendedStage_ = 4u;
+          setApExtendedError("AP extended response missing channel id");
+          continue;
+        }
+
+        if (extendedChannelId == apExtendedLastCompletedChannelId_ &&
+            (!apExtendedPending_ || extendedChannelId != apExtendedChannelId_)) {
+          ++apExtendedPostCompletePackets_;
+          continue;
+        }
+        if (extendedChannelId != apExtendedChannelId_ || !apExtendedPending_) {
+          ++apExtendedStalePackets_;
+          continue;
+        }
+
+        if (liveCommand == STREAM_CHUNK_FAILURE_COMMAND) {
+          apExtendedPending_ = false;
+          apExtendedRequestedAtMs_ = 0u;
+          ++apExtendedFailures_;
+          apExtendedRing_.invalidate();
+          apExtendedStage_ = 4u;
+          if (payload.size() >= 4u) {
+            apExtendedFailureCode_ = readBe16At(payload, 2u);
+            setApExtendedError("Spotify AP extended channel error");
+          } else {
+            ++apExtendedProtocolErrors_;
+            setApExtendedError("AP extended error payload truncated");
+          }
+          continue;
+        }
+
+        size_t extendedOffset = 2u;
+        const bool extendedWasDataState = apExtendedHeadersComplete_;
+        bool extendedMalformed = false;
+        if (!apExtendedHeadersComplete_) {
+          while (extendedOffset < payload.size()) {
+            if (payload.size() - extendedOffset < 2u) {
+              extendedMalformed = true;
+              break;
+            }
+            const uint16_t recordLength = readBe16At(payload, extendedOffset);
+            extendedOffset += 2u;
+            if (recordLength == 0u) {
+              apExtendedHeadersComplete_ = true;
+              break;
+            }
+            if (recordLength < 1u || recordLength > payload.size() - extendedOffset) {
+              extendedMalformed = true;
+              break;
+            }
+            const uint8_t headerId = payload[extendedOffset];
+            const size_t headerDataBytes = static_cast<size_t>(recordLength - 1u);
+            ++apExtendedHeaderCount_;
+            apExtendedHeaderBytes_ += headerDataBytes;
+            if (headerId == 0x03u && headerDataBytes == 4u) {
+              const uint32_t words =
+                  (static_cast<uint32_t>(payload[extendedOffset + 1u]) << 24u) |
+                  (static_cast<uint32_t>(payload[extendedOffset + 2u]) << 16u) |
+                  (static_cast<uint32_t>(payload[extendedOffset + 3u]) << 8u) |
+                  static_cast<uint32_t>(payload[extendedOffset + 4u]);
+              if (words <= 0x3fffffffu) {
+                const uint32_t reported = words * AP_STREAM_WORD_BYTES;
+                if (apExtendedReportedFileBytes_ != 0u &&
+                    apExtendedReportedFileBytes_ != reported) {
+                  extendedMalformed = true;
+                  break;
+                }
+                apExtendedReportedFileBytes_ = reported;
+              }
+            }
+            extendedOffset += static_cast<size_t>(recordLength);
+          }
+        }
+
+        if (extendedMalformed) {
+          apExtendedPending_ = false;
+          apExtendedRequestedAtMs_ = 0u;
+          ++apExtendedProtocolErrors_;
+          apExtendedRing_.invalidate();
+          apExtendedStage_ = 4u;
+          setApExtendedError("AP extended header framing/size invalid");
+          continue;
+        }
+
+        if (apExtendedHeadersComplete_) {
+          if (extendedOffset < payload.size()) {
+            const size_t packetDataBytes = payload.size() - extendedOffset;
+            uint32_t absoluteOffset = 0u;
+            if (apExtendedStage_ == 1u) {
+              absoluteOffset = AP_EXTENDED_SUSTAINED_START_BYTES +
+                  static_cast<uint32_t>(apExtendedSustainedRangeIndex_) *
+                      static_cast<uint32_t>(AP_EXTENDED_RANGE_BYTES) +
+                  static_cast<uint32_t>(apExtendedCurrentDataBytes_);
+            } else if (apExtendedStage_ == 2u) {
+              absoluteOffset = apExtendedTailStartBytes_ +
+                  static_cast<uint32_t>(apExtendedCurrentDataBytes_);
+            } else {
+              apExtendedPending_ = false;
+              apExtendedRequestedAtMs_ = 0u;
+              ++apExtendedProtocolErrors_;
+              apExtendedRing_.invalidate();
+              apExtendedStage_ = 4u;
+              setApExtendedError("AP extended data arrived outside active stage");
+              continue;
+            }
+
+            if (!apExtendedRing_.push(absoluteOffset, payload.data() + extendedOffset,
+                                      packetDataBytes)) {
+              apExtendedPending_ = false;
+              apExtendedRequestedAtMs_ = 0u;
+              ++apExtendedProtocolErrors_;
+              apExtendedRing_.invalidate();
+              apExtendedStage_ = 4u;
+              setApExtendedError("AP extended ring rejected producer bytes");
+              continue;
+            }
+            apExtendedCurrentDataBytes_ += packetDataBytes;
+            if (apExtendedStage_ == 1u) {
+              apExtendedSustainedDataBytes_ += packetDataBytes;
+              apExtendedSustainedProducerHash_ = fnv1a32Update(
+                  apExtendedSustainedProducerHash_, payload.data() + extendedOffset, packetDataBytes);
+            } else {
+              apExtendedTailDataBytes_ += packetDataBytes;
+              apExtendedTailProducerHash_ = fnv1a32Update(
+                  apExtendedTailProducerHash_, payload.data() + extendedOffset, packetDataBytes);
+            }
+            if (!drainApExtendedRing()) {
+              apExtendedPending_ = false;
+              apExtendedRequestedAtMs_ = 0u;
+              ++apExtendedProtocolErrors_;
+              apExtendedRing_.invalidate();
+              apExtendedStage_ = 4u;
+              setApExtendedError("AP extended diagnostic consumer failed");
+              continue;
+            }
+          } else if (extendedWasDataState) {
+            apExtendedPending_ = false;
+            apExtendedRequestedAtMs_ = 0u;
+            apExtendedLastCompletedChannelId_ = apExtendedChannelId_;
+            const size_t expectedRangeBytes = apExtendedStage_ == 1u ?
+                AP_EXTENDED_RANGE_BYTES : apExtendedTailTargetBytes_;
+            if (apExtendedCurrentDataBytes_ != expectedRangeBytes) {
+              ++apExtendedProtocolErrors_;
+              apExtendedRing_.invalidate();
+              apExtendedStage_ = 4u;
+              setApExtendedError(apExtendedCurrentDataBytes_ == 0u ?
+                  "AP extended range closed without data" :
+                  "AP extended range closed short/long");
+              continue;
+            }
+
+            ++apExtendedSuccesses_;
+            if (apExtendedStage_ == 1u) {
+              ++apExtendedSustainedCompletedRanges_;
+              if (apExtendedSustainedCompletedRanges_ == AP_EXTENDED_SUSTAINED_RANGE_COUNT) {
+                if (!apExtendedRing_.finishProducer()) {
+                  ++apExtendedProtocolErrors_;
+                  apExtendedStage_ = 4u;
+                  setApExtendedError("AP extended sustained producer finish mismatch");
+                  continue;
+                }
+                apExtendedSustainedEof_ = apExtendedRing_.eof();
+                apExtendedSustainedHashMatch_ =
+                    apExtendedSustainedProducerHash_ == apExtendedSustainedConsumerHash_ &&
+                    apExtendedSustainedDataBytes_ == AP_EXTENDED_SUSTAINED_TARGET_BYTES &&
+                    apExtendedSustainedConsumerBytes_ == AP_EXTENDED_SUSTAINED_TARGET_BYTES &&
+                    apExtendedRing_.producedBytes() == AP_EXTENDED_SUSTAINED_TARGET_BYTES &&
+                    apExtendedRing_.consumedBytes() == AP_EXTENDED_SUSTAINED_TARGET_BYTES;
+                snapshotApExtendedSustainedRing();
+                const bool sustainedOk = apExtendedRing_.valid() && apExtendedSustainedEof_ &&
+                    apExtendedSustainedHashMatch_ &&
+                    apExtendedSustainedRingBackpressure_ == 0u &&
+                    apExtendedSustainedRingGapErrors_ == 0u &&
+                    apExtendedSustainedRingDuplicateErrors_ == 0u &&
+                    apExtendedSustainedRingProducerErrors_ == 0u;
+                if (!sustainedOk) {
+                  ++apExtendedProtocolErrors_;
+                  apExtendedStage_ = 4u;
+                  setApExtendedError("AP extended sustained integrity verification failed");
+                  continue;
+                }
+
+                apExtendedTailStartBytes_ =
+                    ((apExtendedReportedFileBytes_ - 1u) / AP_EXTENDED_RANGE_BYTES) *
+                    static_cast<uint32_t>(AP_EXTENDED_RANGE_BYTES);
+                apExtendedTailTargetBytes_ =
+                    static_cast<size_t>(apExtendedReportedFileBytes_ - apExtendedTailStartBytes_);
+                if (apExtendedTailTargetBytes_ == 0u ||
+                    apExtendedTailTargetBytes_ > AP_EXTENDED_RANGE_BYTES ||
+                    (apExtendedTailTargetBytes_ % AP_STREAM_WORD_BYTES) != 0u) {
+                  ++apExtendedProtocolErrors_;
+                  apExtendedStage_ = 4u;
+                  setApExtendedError("AP extended tail geometry invalid");
+                  continue;
+                }
+                if (!apExtendedRing_.begin(apExtendedTailStartBytes_, apExtendedTailTargetBytes_)) {
+                  ++apExtendedFailures_;
+                  apExtendedStage_ = 4u;
+                  setApExtendedError("AP extended tail ring reset failed");
+                  continue;
+                }
+                if (!sendApExtendedTail()) {
+                  tcp.stop(); state_ = State::Failed;
+                  setError("AP extended tail write failed"); return false;
+                }
+              } else if (!sendApExtendedSustainedRange(apExtendedSustainedCompletedRanges_)) {
+                tcp.stop(); state_ = State::Failed;
+                setError("AP extended next-range write failed"); return false;
+              }
+            } else if (apExtendedStage_ == 2u) {
+              if (!apExtendedRing_.finishProducer()) {
+                ++apExtendedProtocolErrors_;
+                apExtendedStage_ = 4u;
+                setApExtendedError("AP extended tail producer finish mismatch");
+                continue;
+              }
+              apExtendedTailEof_ = apExtendedRing_.eof();
+              apExtendedTailHashMatch_ =
+                  apExtendedTailProducerHash_ == apExtendedTailConsumerHash_ &&
+                  apExtendedTailDataBytes_ == apExtendedTailTargetBytes_ &&
+                  apExtendedTailConsumerBytes_ == apExtendedTailTargetBytes_ &&
+                  apExtendedRing_.producedBytes() == apExtendedTailTargetBytes_ &&
+                  apExtendedRing_.consumedBytes() == apExtendedTailTargetBytes_;
+              apExtendedTailExactBoundary_ =
+                  apExtendedTailStartBytes_ + apExtendedTailDataBytes_ ==
+                  apExtendedReportedFileBytes_;
+              apExtendedComplete_ = apExtendedRing_.valid() && apExtendedTailEof_ &&
+                  apExtendedTailHashMatch_ && apExtendedTailExactBoundary_ &&
+                  apExtendedRing_.backpressureEvents() == 0u &&
+                  apExtendedRing_.gapErrors() == 0u &&
+                  apExtendedRing_.duplicateErrors() == 0u &&
+                  apExtendedRing_.producerErrors() == 0u &&
+                  apExtendedSustainedHashMatch_ && apExtendedSustainedEof_;
+              if (apExtendedComplete_) {
+                apExtendedStage_ = 3u;
+                setApExtendedError("none");
+              } else {
+                ++apExtendedProtocolErrors_;
+                apExtendedStage_ = 4u;
+                setApExtendedError("AP extended tail integrity verification failed");
+              }
+            }
+          }
+        }
+        continue;
+      }
+    }
 
     // r17 continuous transport is a separate phase/channel namespace layered
     // after the qualified canary. Keeping this handler before the frozen canary
@@ -4686,10 +5291,12 @@ bool SpotifySessionProbe::runOneSession(bool reconnecting) {
                 uint32_t contextSelectedIndex = trackRefIndex_;
                 if (!self && resolveContextPlayerSelection(info, contextSelectedIndex) &&
                     contextSelectedIndex < spircStateTrackRefs_.size() && contextSelectedIndex != trackRefIndex_) {
+                  // r18: the context-player frame can carry the previous track's
+                  // running position. Once the resolved queue identity changes, that
+                  // position is not authoritative for the new media item.
                   SpircFrameInfo selected = makeRetainedSpircState(contextSelectedIndex,
-                      info.hasPlayStatus && info.playStatus == 2u ? 2u : 1u,
-                      info.hasPositionMs ? info.positionMs : 0u);
-                  if (!sendSpircControlNotify(selected)) { tcp.stop(); state_ = State::Failed; return false; }
+                      info.hasPlayStatus && info.playStatus == 2u ? 2u : 1u, 0u);
+                  if (!sendSpircControlNotify(selected, "reset-track-change")) { tcp.stop(); state_ = State::Failed; return false; }
                   spircSelectionApplyLastUs_ = micros() - selectionApplyStartedUs;
                   if (spircSelectionApplyLastUs_ > spircSelectionApplyMaxUs_) {
                     spircSelectionApplyMaxUs_ = spircSelectionApplyLastUs_;
@@ -4705,7 +5312,7 @@ bool SpotifySessionProbe::runOneSession(bool reconnecting) {
                   ++spircEmptyLoadsIgnored_;
                   SpircFrameInfo current = makeRetainedSpircState(trackRefIndex_,
                       spircLastLoadStatus_ == 1u ? 1u : 2u, currentSpircPositionMs());
-                  if (!sendSpircControlNotify(current)) { tcp.stop(); state_ = State::Failed; return false; }
+                  if (!sendSpircControlNotify(current, "retain-empty-load")) { tcp.stop(); state_ = State::Failed; return false; }
                   state_ = State::SpircReady;
                   continue;
                 }
@@ -4718,16 +5325,29 @@ bool SpotifySessionProbe::runOneSession(bool reconnecting) {
                   if (info.hasContextPlayerState) ++spircDuplicateLoadsWithUnknownContext_;
                   SpircFrameInfo current = makeRetainedSpircState(trackRefIndex_,
                       spircLastLoadStatus_ == 1u ? 1u : 2u, currentSpircPositionMs());
-                  if (!sendSpircControlNotify(current)) { tcp.stop(); state_ = State::Failed; return false; }
+                  if (!sendSpircControlNotify(current, "retain-duplicate-load")) { tcp.stop(); state_ = State::Failed; return false; }
                   ++spircDuplicateLoadsAcked_;
                   state_ = State::SpircReady;
                   continue;
                 }
-                if (!self && !sendSpircTransferNotify(info)) {
-                  tcp.stop(); state_ = State::Failed; return false;
-                }
-                if (!self && !sendTrackMetadataRequest(info)) {
-                  tcp.stop(); state_ = State::Failed; return false;
+                if (!self) {
+                  const bool directTrackChange = spircLocalActive_ &&
+                      info.selectedTrackGid.size() == TRACK_GID_BYTES && trackRefGidHex_[0] != '\0' &&
+                      memcmp(selectedTrackGid_, info.selectedTrackGid.data(), TRACK_GID_BYTES) != 0;
+                  SpircFrameInfo loadState = info;
+                  if (directTrackChange) {
+                    loadState.position = 0u;
+                    loadState.positionMs = 0u;
+                    loadState.hasPosition = false;
+                    loadState.hasPositionMs = true;
+                  }
+                  if (!sendSpircTransferNotify(loadState,
+                          directTrackChange ? "reset-track-change" : "remote-load")) {
+                    tcp.stop(); state_ = State::Failed; return false;
+                  }
+                  if (!sendTrackMetadataRequest(loadState)) {
+                    tcp.stop(); state_ = State::Failed; return false;
+                  }
                 }
               } else if (info.type == SPIRC_REPLACE) {
                 ++spircReplaceFrames_;
@@ -4735,7 +5355,7 @@ bool SpotifySessionProbe::runOneSession(bool reconnecting) {
                 const bool selected = !self && resolveContextPlayerSelection(info, contextSelectedIndex);
                 if (!self && selected && contextSelectedIndex < spircStateTrackRefs_.size()) {
                   SpircFrameInfo replacement = makeRetainedSpircState(contextSelectedIndex, 1u, 0u);
-                  if (!sendSpircControlNotify(replacement)) { tcp.stop(); state_ = State::Failed; return false; }
+                  if (!sendSpircControlNotify(replacement, "reset-track-change")) { tcp.stop(); state_ = State::Failed; return false; }
                   if (contextSelectedIndex != trackRefIndex_ && !sendTrackMetadataRequest(replacement)) {
                     tcp.stop(); state_ = State::Failed; return false;
                   }
@@ -4745,7 +5365,7 @@ bool SpotifySessionProbe::runOneSession(bool reconnecting) {
                   // but ACK our current state so the controller does not retry forever.
                   SpircFrameInfo current = makeRetainedSpircState(trackRefIndex_,
                       spircLastLoadStatus_ == 1u ? 1u : 2u, currentSpircPositionMs());
-                  if (!sendSpircControlNotify(current)) { tcp.stop(); state_ = State::Failed; return false; }
+                  if (!sendSpircControlNotify(current, "retain-replace")) { tcp.stop(); state_ = State::Failed; return false; }
                 }
               } else if (info.type == SPIRC_PLAY) {
                 ++spircPlayFrames_;
@@ -4767,25 +5387,25 @@ bool SpotifySessionProbe::runOneSession(bool reconnecting) {
                     ++spircPlaySelectFrames_;
                     ++spircPlaySelectByIndex_;
                     SpircFrameInfo selected = makeRetainedSpircState(requestedIndex, 1u, 0u);
-                    if (!sendSpircControlNotify(selected)) { tcp.stop(); state_ = State::Failed; return false; }
+                    if (!sendSpircControlNotify(selected, "reset-track-change")) { tcp.stop(); state_ = State::Failed; return false; }
                     if (!sendTrackMetadataRequest(selected)) { tcp.stop(); state_ = State::Failed; return false; }
                   } else {
                     SpircFrameInfo current = makeRetainedSpircState(trackRefIndex_, 1u, currentSpircPositionMs());
-                    if (!sendSpircControlNotify(current)) { tcp.stop(); state_ = State::Failed; return false; }
+                    if (!sendSpircControlNotify(current, "play-current")) { tcp.stop(); state_ = State::Failed; return false; }
                   }
                 }
               } else if (info.type == SPIRC_PAUSE) {
                 ++spircPauseFrames_;
                 if (!self) {
                   SpircFrameInfo current = makeRetainedSpircState(trackRefIndex_, 2u, currentSpircPositionMs());
-                  if (!sendSpircControlNotify(current)) { tcp.stop(); state_ = State::Failed; return false; }
+                  if (!sendSpircControlNotify(current, "pause-current")) { tcp.stop(); state_ = State::Failed; return false; }
                 }
               } else if (info.type == SPIRC_PLAY_PAUSE) {
                 ++spircPlayPauseFrames_;
                 if (!self) {
                   const uint32_t status = spircLastLoadStatus_ == 1u ? 2u : 1u;
                   SpircFrameInfo current = makeRetainedSpircState(trackRefIndex_, status, currentSpircPositionMs());
-                  if (!sendSpircControlNotify(current)) { tcp.stop(); state_ = State::Failed; return false; }
+                  if (!sendSpircControlNotify(current, "playpause-current")) { tcp.stop(); state_ = State::Failed; return false; }
                 }
               } else if (info.type == SPIRC_SEEK) {
                 ++spircSeekFrames_;
@@ -4794,7 +5414,7 @@ bool SpotifySessionProbe::runOneSession(bool reconnecting) {
                                             (info.hasPositionMs ? info.positionMs : currentSpircPositionMs());
                   SpircFrameInfo current = makeRetainedSpircState(trackRefIndex_,
                       spircLastLoadStatus_ == 1u ? 1u : 2u, position);
-                  if (!sendSpircControlNotify(current)) { tcp.stop(); state_ = State::Failed; return false; }
+                  if (!sendSpircControlNotify(current, "seek-explicit")) { tcp.stop(); state_ = State::Failed; return false; }
                 }
               } else if (info.type == SPIRC_NEXT || info.type == SPIRC_PREV) {
                 if (info.type == SPIRC_NEXT) ++spircNextFrames_; else ++spircPrevFrames_;
@@ -4805,10 +5425,15 @@ bool SpotifySessionProbe::runOneSession(bool reconnecting) {
                   } else if (nextIndex != 0u) {
                     --nextIndex;
                   }
+                  const bool trackChanged = nextIndex != trackRefIndex_;
                   SpircFrameInfo nextState = makeRetainedSpircState(nextIndex,
-                      spircLastLoadStatus_ == 1u ? 1u : 2u, 0u);
-                  if (!sendSpircControlNotify(nextState)) { tcp.stop(); state_ = State::Failed; return false; }
-                  if (nextIndex != trackRefIndex_ && !sendTrackMetadataRequest(nextState)) {
+                      spircLastLoadStatus_ == 1u ? 1u : 2u,
+                      trackChanged ? 0u : currentSpircPositionMs());
+                  if (!sendSpircControlNotify(nextState,
+                          trackChanged ? "reset-track-change" : "nav-boundary-current")) {
+                    tcp.stop(); state_ = State::Failed; return false;
+                  }
+                  if (trackChanged && !sendTrackMetadataRequest(nextState)) {
                     tcp.stop(); state_ = State::Failed; return false;
                   }
                 }
@@ -4865,6 +5490,7 @@ bool SpotifySessionProbe::runOneSession(bool reconnecting) {
                 strlcpy(metadataArtists_, metadata.artists.c_str(), sizeof(metadataArtists_));
                 strlcpy(metadataAlbum_, metadata.album.c_str(), sizeof(metadataAlbum_));
                 metadataDurationMs_ = metadata.durationMs;
+                metadataPlaybackGeneration_ = metadataAuditGeneration_;
                 metadataCoverCount_ = metadata.coverCount;
                 const String coverHex = metadata.coverId.empty() ? String() :
                     bytesToHex(metadata.coverId.data(), metadata.coverId.size());

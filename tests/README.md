@@ -117,3 +117,31 @@ Set `SPOTIFY_PROBE_SANITIZERS=1` to enable ASan/UBSan on either native suite.
 These tests do not compile full WLED, run FreeRTOS scheduling, contact Spotify or
 prove hardware behavior. `test_dev2n_r16_probe_contract.py` additionally verifies
 frozen r14/r15 files/blocks, routing, limits, and current postbuild literals.
+
+## dev.2n-r17 / r18 / r19 transport and control regressions
+
+`test_dev2n_r17_continuous_ring_native.py` executes the bounded 64 KiB encrypted-byte ring
+used by the hardware-qualified r17 stage. `test_dev2n_r17_continuous_contract.py` retains the
+r16 key/audit freeze and the 16 x 4096-byte r17 transport fence.
+
+`test_dev2n_r18_spirc_position_contract.py` keeps the hardware-qualified track-boundary
+position semantics: changed identity resets to zero; Pause/Resume and Seek remain
+current-track operations. In r19 the only intentionally changed decoder file from that r18
+freeze is `SpotifyApContinuousRing`, where wrap counters are additive diagnostics.
+
+`test_dev2n_r19_extended_ring_native.py` executes the actual ring over 1 MiB/256 ranges,
+verifies 16 complete read/write address cycles, an exact EOF-tail shape and cancellation
+invalidation. `test_dev2n_r19_extended_contract.py` guards the r17 prerequisite ordering,
+1 MiB geometry, AP-reported EOF derivation, channel ownership, track-change wipe and the
+closed live decrypt/Vorbis/PCM fence. Set `SPOTIFY_R19_SANITIZERS=1` for GCC ASan/UBSan;
+`CXX=clang++` selects Clang for the native test.
+
+
+## dev.2n-r20 virtual EOS
+
+`test_dev2n_r20_eos_policy_native.py` compiles/runs the header-only EOS decision policy and
+checks idle, pre-duration, paused, already-handled generation, normal advance, repeat hold and
+queue-boundary hold cases. `test_dev2n_r20_virtual_eos_contract.py` guards the integration: EOS
+is evaluated only with an idle AP socket, duration is bound to the metadata generation that supplied
+it, automatic advance is one-shot, position resets to zero, and the qualified r19 encrypted transport
+plus key/decrypt/decoder/audio paths remain frozen.

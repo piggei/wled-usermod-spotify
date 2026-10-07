@@ -1,4 +1,4 @@
-# Current scope update - dev.2n-r17
+# Current scope update - dev.2n-r18
 
 r16 hardware sent all six planned concrete primary/alternative probes; every one
 returned `AesKeyError 0:1`. A fresh upstream librespot `dev` build on Windows then
@@ -10,11 +10,12 @@ explanations, without claiming a universal Spotify backend rule.
 
 A current go-librespot master audit also found the public PlayPlay plugin still
 unsupported/stubbed (`IsSupported() == false`, no token, deobfuscation returns
-`playplay plugin not provided`), so r17 does not attempt a PlayPlay integration.
+`playplay plugin not provided`), so r18 does not attempt a PlayPlay integration.
 RequestKey/AP identity/country remain frozen pending new external evidence.
 
-r17 advances only bounded encrypted transport; see
-[DEV2N_R17_CONTINUOUS_AP_STREAM.md](DEV2N_R17_CONTINUOUS_AP_STREAM.md).
+The r17 bounded encrypted transport is now hardware-qualified on two tracks. r18 keeps
+AudioKey frozen and changes only SPIRC new-track position semantics; see
+[DEV2N_R18_SPIRC_POSITION.md](DEV2N_R18_SPIRC_POSITION.md).
 
 # Current scope update - dev.2n-r15
 

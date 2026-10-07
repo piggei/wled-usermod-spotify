@@ -1,6 +1,6 @@
-# Continuation after dev.2n-r17
+# Continuation after dev.2n-r18
 
-## Current gate: 64 KiB encrypted transport
+## Current gate: SPIRC position-boundary correction
 
 r16 hardware sent six concrete primary/alternative AudioKey probes and all were
 explicitly rejected `0:1`. A fresh upstream librespot `dev` build on Windows, same
@@ -10,21 +10,22 @@ way. Current go-librespot master exposes a PlayPlay interface but its public plu
 remains unsupported/stubbed, so no public compatible license provider is available
 to integrate here.
 
-r17 therefore freezes RequestKey and advances only sustained encrypted transport:
-16 x 4096-byte sequential AP ranges through a bounded PSRAM-preferred ring and an
-independent hash-only consumer. Live AES/Vorbis remains disconnected.
+r17 hardware is now clean on two tracks: both 64 KiB sequences completed 16/16 with
+matching producer/consumer hashes, zero transport/order errors and PSRAM high-water of
+4096 bytes. AP encrypted-byte transport is therefore qualified at that bounded window.
 
-## Decision after r17 hardware
+r18 corrects an independent SPIRC UI/control issue observed during that test: a direct
+new-track selection could inherit the previous track's running `positionMs`. Changed
+identities now reset to zero, while initial ownership transfer and current-track
+Pause/Resume/Seek keep their appropriate position semantics.
 
-If the 64 KiB pass is clean on at least two tracks, treat AP encrypted-byte transport
-as qualified for the next media-plumbing step. Do not reopen AudioKey without new
-external evidence (upstream fix, legitimate compatible licensing path, or a known
-working independent client on this same account).
+## Decision after r18 hardware
 
-The next safe engineering work after a clean r17 is transport lifecycle rather than
-DRM: real file-length termination, cancellation/seek behavior, longer sustained
-windows and producer/consumer scheduling. A live decrypt/decoder join remains gated
-on a legitimately returned usable key.
+After confirming the new track starts near zero and Pause/Resume/Seek do not regress,
+the next safe engineering work is transport lifecycle rather than DRM: real file-length
+termination, cancellation/seek behavior, longer sustained windows and producer/consumer
+scheduling. Do not reopen AudioKey without new external evidence. A live decrypt/decoder
+join remains gated on a legitimately returned usable key.
 
 ## Qualified components that remain frozen
 
@@ -37,4 +38,4 @@ on a legitimately returned usable key.
 ## Deferred
 
 No PlayPlay deobfuscator, identity impersonation, entitlement bypass, live Spotify
-AES decrypt or decoder feed is introduced in r17.
+AES decrypt or decoder feed is introduced in r18.
