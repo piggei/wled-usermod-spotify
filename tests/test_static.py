@@ -11,11 +11,11 @@ pcm_h = (root / "spotify" / "SpotifyPcmTestSource.h").read_text()
 pcm_cpp = (root / "spotify" / "SpotifyPcmTestSource.cpp").read_text()
 
 assert lib["name"] == "wled-usermod-spotify"
-assert lib["version"] == "0.1.0-dev.2m-key-block-r14"
-assert not lib.get("dependencies")
+assert lib["version"] == "0.1.0-dev.2n-vorbis-r7"
+assert lib.get("dependencies") == [{"owner": "esphome", "name": "micro-vorbis", "version": "^0.1.0", "platforms": "espressif32"}]
 assert lib["build"]["libArchive"] is False
-assert 'USERMOD_VERSION = "0.1.0-dev.2m-key-block"' in header
-assert 'USERMOD_REVISION = "r14"' in header
+assert 'USERMOD_VERSION = "0.1.0-dev.2n-vorbis"' in header
+assert 'USERMOD_REVISION = "r7"' in header
 assert "toneTestLoop" not in header
 assert "playTestTone" not in header
 assert "audio_.startTestTone" in header
@@ -86,8 +86,8 @@ shan_cpp = (root / "spotify" / "SpotifyShannon.cpp").read_text()
 assert "SpotifySessionProbe sessionProbe_" in header
 assert 'server.on(F("/spotify-session")' in header
 assert 'action == "probe"' in header and 'action == "stop"' in header and 'action == "reset"' in header
-assert "Spotify media-key hardening gate" in header
-assert "one RequestKey diagnostic scan per session -> media-key service-block latch/suppression -> qualified AP StreamChunk canary" in header
+assert "Spotify media-key hardening" in header
+assert "scope=Spotify network remains frozen at encrypted StreamChunk; independent local Ogg/Vorbis -> PCM gate enabled; AES integration remains closed" in header
 assert "xTaskCreate(taskThunk" in sess_cpp
 assert "xTaskCreatePinnedToCore" not in sess_cpp
 assert "http://apresolve.spotify.com/?type=accesspoint" in sess_cpp

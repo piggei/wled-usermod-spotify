@@ -4,13 +4,14 @@
 #include "spotify/SpotifyZeroConfProbe.h"
 #include "spotify/SpotifyPcmTestSource.h"
 #include "spotify/SpotifySessionProbe.h"
+#include "decoder/SpotifyVorbisFixturePlayer.h"
 #include <driver/gpio.h>
 #include <esp_timer.h>
 
 class UsermodSpotifyConnect : public Usermod {
 private:
-  static constexpr const char* USERMOD_VERSION = "0.1.0-dev.2m-key-block";
-  static constexpr const char* USERMOD_REVISION = "r14";
+  static constexpr const char* USERMOD_VERSION = "0.1.0-dev.2n-vorbis";
+  static constexpr const char* USERMOD_REVISION = "r7";
   bool enabled_ = false;
   bool ready_ = false;
   bool initPending_ = false;
@@ -20,6 +21,7 @@ private:
   WavesharePcmOutput audio_;
   SpotifyZeroConfProbe zeroConf_;
   SpotifyPcmTestSource pcmTest_;
+  SpotifyVorbisFixturePlayer vorbisFixture_;
   SpotifySessionProbe sessionProbe_;
 
   bool arOwnsPin(int pin) const {
@@ -102,13 +104,14 @@ public:
       if (!enabled_) { request->send(409, FPSTR(CONTENT_TYPE_PLAIN), F("Spotify usermod disabled")); return; }
       if (!ready_) { request->send(409, FPSTR(CONTENT_TYPE_PLAIN), String(F("Audio not ready: ")) + audio_.lastError()); return; }
       if (!request->hasParam("action")) {
-        request->send(400, FPSTR(CONTENT_TYPE_PLAIN), F("Use ?action=start&tone=1000, ?action=start-pcm&tone=1000 or ?action=stop"));
+        request->send(400, FPSTR(CONTENT_TYPE_PLAIN), F("Use ?action=start&tone=1000, ?action=start-pcm&tone=1000, ?action=start-vorbis or ?action=stop"));
         return;
       }
       const String action = request->getParam("action")->value();
       if (action == "start") {
         uint16_t hz = 1000;
         if (request->hasParam("tone")) hz = (uint16_t)constrain(request->getParam("tone")->value().toInt(), 20, 10000);
+        vorbisFixture_.stop();
         pcmTest_.stop();
         audio_.flushPcm();
         audio_.startTestTone(hz);
@@ -118,6 +121,7 @@ public:
       if (action == "start-pcm") {
         uint16_t hz = 1000;
         if (request->hasParam("tone")) hz = (uint16_t)constrain(request->getParam("tone")->value().toInt(), 20, 10000);
+        vorbisFixture_.stop();
         audio_.stopTestTone();
         audio_.flushPcm();
         if (!pcmTest_.start(audio_, hz)) {
@@ -127,7 +131,19 @@ public:
         request->send(200, FPSTR(CONTENT_TYPE_PLAIN), String(F("started cspot-like PCM 44100 Hz source, tone=")) + hz + F(" Hz; runs until action=stop"));
         return;
       }
+      if (action == "start-vorbis") {
+        pcmTest_.stop();
+        audio_.stopTestTone();
+        audio_.flushPcm();
+        if (!vorbisFixture_.start(audio_)) {
+          request->send(500, FPSTR(CONTENT_TYPE_PLAIN), String(F("local Ogg/Vorbis fixture failed to start: ")) + vorbisFixture_.lastError());
+          return;
+        }
+        request->send(200, FPSTR(CONTENT_TYPE_PLAIN), F("started local 44.1 kHz stereo Ogg/Vorbis fixture; one-shot playback"));
+        return;
+      }
       if (action == "stop") {
+        vorbisFixture_.stop();
         pcmTest_.stop();
         audio_.stopTestTone();
         audio_.flushPcm();
@@ -159,7 +175,7 @@ public:
     if (!enabled_) s.add(F("disabled"));
     else if (!ready_ && selectClockMode() == ClockMode::WaitingSharedClock) s.add(F("waiting: AudioReactive owns clocks but LRCK inactive"));
     else if (!ready_) s.add(String(F("audio not ready: "))+audio_.lastError());
-    else s.add(F("audio ready | Spotify media-key hardening gate"));
+    else s.add(F("audio ready | Spotify media-key hardening + local Vorbis gate"));
 
     JsonArray z=user.createNestedArray(F("Spotify Zeroconf"));
     z.add(String(F("state=")) + zeroConf_.stateName() + F(" | cpath=") + zeroConf_.cpath());
@@ -404,7 +420,7 @@ public:
     n.add(String(F("AP task attempts=")) + sessionProbe_.attempts() +
           F(" heap=") + sessionProbe_.heapBefore() + F("->") + sessionProbe_.heapAfter() +
           F(" minHeap=") + sessionProbe_.minHeapSeen() + F(" stackMin=") + sessionProbe_.stackMinFree());
-    n.add(F("scope=metadata -> one RequestKey diagnostic scan per session -> media-key service-block latch/suppression -> qualified AP StreamChunk canary; decrypt/decoder remain closed"));
+    n.add(F("scope=Spotify network remains frozen at encrypted StreamChunk; independent local Ogg/Vorbis -> PCM gate enabled; AES integration remains closed"));
 
     JsonArray a=user.createNestedArray(F("Spotify audio"));
     const auto t=audio_.telemetry();
@@ -434,6 +450,19 @@ public:
           F(" hz=") + pcmTest_.frequencyHz() + F(" generated=") + pt.generatedFrames +
           F(" feedCalls=") + pt.feedCalls + F(" feedFail=") + pt.feedFailures +
           F(" maxFeed=") + pt.maxFeedUs + F("us stackMin=") + pt.stackMinFree);
+    const auto vt = vorbisFixture_.telemetry();
+    a.add(String(F("vorbisFixture=")) + (vorbisFixture_.active() ? F("active") : F("idle")) +
+          F(" state=") + vorbisFixture_.lastError() + F(" starts=") + vt.starts + F(" complete=") + vt.completed +
+          F(" result=") + vt.lastResult + F(" decodeCalls=") + vt.decodeCalls + F(" errors=") + vt.decodeErrors +
+          F(" eos=") + vt.eosReports + F(" eof=") + vt.eofCompletions);
+    a.add(String(F("vorbis PCM ")) + vt.sampleRate + F("Hz ch=") + vt.channels +
+          F(" input=") + vt.inputConsumed + F("/") + vorbisFixture_.fixtureBytes() +
+          F(" frames=") + vt.pcmFrames + F(" expected=") + vorbisFixture_.expectedFrames() +
+          F(" feedCalls=") + vt.feedCalls + F(" feedFail=") + vt.feedFailures);
+    a.add(String(F("vorbis timing decodeMax=")) + vt.maxDecodeUs + F("us feedMax=") + vt.maxFeedUs +
+          F("us stackMin=") + vt.stackMinFree + F(" outBuf=") + vt.outputBufferBytes);
+    a.add(String(F("vorbis memory internal=")) + vt.internalHeapBefore + F("->") + vt.internalHeapAfter +
+          F(" min=") + vt.internalHeapMin + F(" psram=") + vt.psramBefore + F("->") + vt.psramAfter);
   }
 
   void addToConfig(JsonObject& root) override {
@@ -454,7 +483,7 @@ public:
     getJsonValue(top[F("Volume")], vol);
     volume_=(uint8_t)constrain(vol,0,100);
     if (ready_) audio_.setVolume(volume_);
-    if (old && !enabled_) { pcmTest_.stop(); audio_.stopTestTone(); audio_.end(); ready_=false; if (sessionProbe_.active()) sessionProbe_.requestStop(); else sessionProbe_.reset(); }
+    if (old && !enabled_) { vorbisFixture_.stop(); pcmTest_.stop(); audio_.stopTestTone(); audio_.end(); ready_=false; if (sessionProbe_.active()) sessionProbe_.requestStop(); else sessionProbe_.reset(); }
     if (!old && enabled_) { initPending_=true; initSince_=millis(); }
     return true;
   }

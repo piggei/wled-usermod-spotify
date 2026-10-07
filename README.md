@@ -1,91 +1,98 @@
 # WLED Spotify Connect Usermod
 
-Current development build: **v0.1.0-dev.2m-key-block-r14**
+Current development build: **v0.1.0-dev.2n-vorbis-r7**
 
-**r14 is a conservative scheduling-only optimization above the hardware-qualified r12 canonical queue selection gate and the hardware-qualified r13 timing measurement.** r12 successfully resolved direct playlist taps through `skip_to.track_uid -> URI -> canonical GID-only classic TrackRef`, and repeated taps changed TrackRef/GID/metadata/AP Stream correctly. r13 deliberately preserves that control-plane behavior and adds only latency telemetry to localize the observed roughly one-second UI delay before any polling/scheduling optimization. r8a hardware proved that the current Android `Frame.context_player_state` is a gzip member (`1f8b08...`), not an uncompressed JSON/protobuf blob. r9 therefore parses the gzip envelope, enforces a 128 KiB decompressed-size ceiling, inflates the raw DEFLATE member through the ESP32-S3 ROM miniz helper, verifies the gzip CRC32, then runs the existing bounded JSON/protobuf target parser and exact retained-queue correlation on the decompressed bytes. The decompressed body exists only for the current frame and is never serialized.
-
-r3 fixed the current-SPIRC queue/state encoding and made Android Now Playing remain visible. r4 qualified classic command acknowledgements and Next end-to-end. r5 qualified persistent Play/Pause, Next, metadata refresh, media-key suppression and a second AP Stream probe. Direct playlist taps remained the only open classic-control issue. r6 rejected the historical JSON assumption for `Frame.context_player_state`; r7 then proved on hardware that a direct Android row tap **does reach the classic SPIRC bus as a second Load**, but the top-level State still names the current track while field 19 changes from the small initial payload to a much larger opaque binary payload. The old duplicate-Load guard therefore discarded the real selection. r8 characterizes that opaque field safely and correlates exact URI/GID identities against the already-retained field-27 queue, selecting only when exactly one non-current queue entry is unambiguous.
+`dev.2n-r7` continues the deliberately independent audio-decoder workstream above the **hardware-qualified dev.2m-r14 baseline**. The Spotify network/control path is frozen: direct playlist selection, AP/Shannon/Mercury/SPIRC, metadata, RequestKey suppression and AP StreamChunk are not changed by this build.
 
 Target baseline: WLED 17.0.0-devV5 / `ESP32-S3_Waveshare_HUB75` on the Waveshare ESP32-S3 RGB Matrix board.
 
-## Current status
+## Current qualified baseline
 
-The qualified path is preserved through Zeroconf/LoginBlob, AP handshake/DH/Shannon authentication, persistent Mercury/SPIRC, TrackRef, Mercury metadata, AudioFile selection and encrypted media transport over AP StreamChunk. The Waveshare shared-I2S/ES8311 backend and `enqueuePcm44100()` ingress remain frozen.
+Real hardware has qualified the receiver through r14:
 
-`dev.2l-r2` is qualified on real hardware: three consecutive encrypted 4096-byte ranges at offsets 0/4096/8192 completed with `attempts=3 ok=3`, `dataBytes=12288`, no timeout/protocol/stale errors, `macFail=0`, and no audio-backend regression.
+- direct row selection now resolves `skip_to.track_uid -> URI -> canonical classic TrackRef`, including the observed GID-only queue;
+- repeated taps advance TrackRef/GID, metadata and AP Stream exactly once per selection;
+- r13 measured the local resolved Load-to-Notify path at about **45-47 ms** after the Load arrives;
+- r14 reduced only the idle AP receive poll from 250 ms to 50 ms and retained `macFail=0`, AP Stream success, ~43 WLED FPS and a clean audio sink;
+- the affected Premium account still receives `AesKeyError 0:1` for every AudioFile candidate, while encrypted AP StreamChunk transport remains healthy.
 
-The remaining external blocker is the media AES key. On the affected Premium account all four AudioFile candidates return correlated `AesKeyError 0x0e / 0:1`. Current librespot 0.8.0 on native Windows, same account/network, independently reproduced `audio key 0 1` on multiple tracks and the same `Country: "NG"`. RequestKey is therefore frozen pending new evidence.
+The media-key failure is therefore kept separate from decoder engineering. The dev.2i RequestKey wire contract remains frozen until comparative evidence justifies a change.
 
-Hardware r10 kept the gzip decoder stable and the controller usable, but direct selection still remained unresolved. On the first transfer the decoded JSON was 1,412 bytes with `endpoint=play`; after a direct row tap the second classic Load inflated to a 20,634-byte last decoded JSON body, while TrackRef/metadata remained unchanged and `unresolved` advanced 1->2. r11 then proved the modern side of the mapping: the direct tap produced one bounded `skip_to`, found its `track_uid`, and resolved that UID to a Spotify track URI (`uidResolved=1`), but `queueResolved` stayed zero. The same session retained 82 classic TrackRefs occupying 1,476 bytes total: exactly 18 bytes per TrackRef, the protobuf size of field 1 + length 16 + a 16-byte GID. r12 therefore canonicalizes those GID-only classic TrackRefs to `spotify:track:` URIs before matching the modern UID-resolved URI.
+## Scope of dev.2n-r7
 
-## Scope of dev.2m-r14
+This build adds a **local, non-encrypted Ogg/Vorbis qualification fixture**. It intentionally does not consume Spotify media bytes and cannot bypass the missing Spotify AES key.
 
-This build hardens the receiver around that known service-side block instead of retrying it on every track.
+- Decoder dependency: `esphome/micro-vorbis ^0.1.0`.
+- Fixture: embedded Ogg/Vorbis, 2.0 s, 44.1 kHz, stereo; left channel 440 Hz, right channel 660 Hz.
+- Decoder runs in its own unpinned FreeRTOS task (`spotify-vorbis`, 12288-byte stack).
+- A 16 KiB decode output buffer prefers PSRAM and falls back to internal 8-bit RAM.
+- PCM format is accepted only as 44.1 kHz / 16-bit / 2-channel output.
+- Decoded PCM feeds only the already-qualified `WavesharePcmOutput::enqueuePcm44100()` API.
+- The fixture must terminate with decoder `END_OF_STREAM`; simple input exhaustion is treated as a failure.
+- Telemetry records decode/feed counters, PCM frames, timing, task stack watermark, internal heap and PSRAM deltas.
+- No AES, Spotify media body, key, credential or token is added to diagnostics.
 
-- A freshly started Spotify session performs the existing bounded candidate scan once.
-- The block is latched **only** when every candidate ends in `0x0e / 0:1`. Other error codes/timeouts do not activate the latch.
-- While latched, subsequent tracks in the same started session still perform SPIRC/TrackRef/metadata processing but suppress redundant RequestKey scans.
-- The already-qualified AP StreamChunk canary may still run for each new track, proving encrypted media reachability remains alive.
-- Automatic AP reconnects inside the same session task preserve the latch, avoiding request storms. A fresh usermod/session start clears it so service recovery can be detected.
-- No AES key, credential, media body or reusable token is exposed. No decrypt, decoder or PCM feed is introduced.
-- The r3 field-27 queue mirror remains unchanged; real hardware proved it keeps Android Now Playing visible.
-- r4 command/ack handling remains intact and is hardware-qualified for Next.
-- r5 decouples controller playback state from AES-key availability: a missing key keeps audio silent but no longer forces the Spotify UI back to Pause.
-- r5 keeps a small virtual playback-position clock so Play/Pause/Seek Notify state remains temporally coherent even while no PCM is produced.
-- r5 also accepts direct queue selection carried inside a Play frame through `playing_track_index`/State index, resolving that index against the retained field-27 TrackRef queue before requesting metadata.
-- Empty/duplicate Load retries remain actively acknowledged with the retained state.
-- r7 stops advertising `kSupportsPlaylistV2`; classic commands/field-27 queue remain supported, but the newer playlist-v2/connect-state command contract is not claimed.
-- r7 hardware proved that direct row selection is still delivered through classic SPIRC: `load` advanced 1→2 and field-19 traffic changed, while the top-level selected GID/index remained the old track. The payload did not match the historical JSON or the initially assumed current protobuf identity shape.
-- r8 keeps both schema-specific parsers as bounded compatibility paths but adds a schema-agnostic diagnostic envelope: last payload length, FNV-1a identity hash, first 16 bytes as hex, compression/magic classification, printable ratio and top-level protobuf wire summary. No raw field-19 body is exposed.
-- r8a hardware established the missing envelope exactly: field 19 is gzip. The current-track payload ended with `lastBytes=2259`, while a direct row tap produced a new `lastBytes=6332` gzip member; raw URI/GID scanning correctly found nothing because the selection was compressed.
-- r9a parses that gzip envelope with the ESP32-S3 ROM miniz `tinfl` path. The high-level `tinfl_decompress_mem_to_mem()` helper from r9 is intentionally not used because it places the large `tinfl_decompressor` state on the caller stack; r9a heap-allocates that state and calls low-level `tinfl_decompress()` instead. `ISIZE` remains bounded to 1..131072 bytes, CRC32 is verified, output prefers PSRAM, and all transient buffers are released immediately.
-- r9 first parses the inflated body for an explicit historical `skip_to`/URI/index target; if no schema target is available it applies the same exact queue-identity scan to the inflated bytes. A target is adopted only when it resolves to a non-current retained TrackRef.
-- r12 preserves the bounded r11 multi-`skip_to` enumeration but canonicalizes each retained TrackRef identity: a native `spotify:track:` URI is preferred, otherwise a valid 16-byte GID is converted with the already-qualified `spotifyTrackUriFromGid()` path.
-- `track_index` inside modern context JSON is advisory only. It is counted as validated only when it equals the URI/UID-resolved classic queue index; index-only or page-relative-looking values are ignored rather than used to select a song.
-
-## `/json/info` additions
+Manual control:
 
 ```text
-MediaKey state=<idle|requesting|diagnostic|ready|service-blocked> blocked=<yes|no> blockEvents=<n> suppressedTracks=<n> blockErr=<a>:<b>
+/spotify-test?action=start-vorbis
+/spotify-test?action=stop
 ```
 
-Expected first-track result on the currently affected account:
+Existing controls remain available:
 
 ```text
-AudioKey requests=4 responses=4 ok=0 errors=4 ...
-MediaKey state=service-blocked blocked=yes blockEvents=1 suppressedTracks=0 blockErr=0:1
+/spotify-test?action=start&tone=1000
+/spotify-test?action=start-pcm&tone=1000
+/spotify-session?action=stop|reset|probe
 ```
 
-The r12 direct-selection gate and r13 timing measurement are hardware-qualified. The immediate r14 gate is stability-first after reducing only the idle AP receive poll from 250 ms to 50 ms: After the first blocked track, tap exactly one different row in the same playlist and inspect `SPIRC contextInflate`. Expected first success is `attempts>=1 ok>=1 failures=0 status=ok`. For the observed GID-only queue, `SPIRC contextQueue` should report `gidOnly>0` and `canonical=refs`. A direct tap should then produce `contextSkip uidResolved>=1 queueResolved>=1`, a unique non-current index, `bySkip>=1`/`byInflate>=1`, new TrackRef/GID/metadata, unchanged RequestKey count under the service-block latch, and another AP Stream 3/3. `track_index` may validate the identity but must never select by itself.
+## Expected hardware gate for dev.2n-r7
 
-## Closed prerequisite investigations
+After calling `start-vorbis`, the speaker should play the short local fixture once. `/json/info` should then show, at minimum:
 
-- `dev.2j-r2`: ProductInfo is valid Premium data but reports `headFiles=0`; no legacy `head-files-url` is supplied.
-- `dev.2k-r1`: native ESP-IDF TLS reaches link stage but the prebuilt target framework has no mbedTLS SSL/TLS engine (`mbedtls_ssl_*` definitions absent). Do not weaken certificate verification or globally rebuild WLED for this gate.
-- `dev.2l-r2`: encrypted media range transport through the existing AP/Shannon connection is qualified.
+```text
+vorbisFixture=idle state=complete starts=1 complete=1 ... errors=0
+vorbis PCM 44100Hz ch=2 input=10437/10437 frames=<about 88200> feedCalls=>0 feedFail=0
+vorbis timing decodeMax=<measured>us feedMax=<measured>us stackMin=>0 outBuf=16384
+vorbis memory internal=<before>-><after> min=<min> psram=<before>-><after>
+```
 
-## Frozen qualified baseline
+The existing audio line must remain clean (`err=0`, `short=0`, `late=0`, `ringUnderrun=0`). A normal Spotify transfer/direct row tap after the fixture must still preserve the r14 network/control behavior.
 
-Do not alter without new evidence: shared-I2S/ES8311/DMA, 44.1 kHz PCM ingress, Zeroconf/LoginBlob/persistence, AP DH/Shannon/stored-credential auth, keepalive/Mercury/SPIRC, TrackRef/metadata, dev.2i RequestKey wire contract/correlation, and dev.2l AP StreamChunk transport.
+## Spotify media-key investigation remains open
 
-The next independent workstream after dev.2m is local Ogg/Vorbis decode qualification feeding only `WavesharePcmOutput::enqueuePcm44100()`. It must not depend on a live Spotify AES key.
+The second available non-Premium account is **not** a usable AudioKey A/B control: the Spotify app discovers `WLED Matrix` but disables selection with “Passa a Spotify Premium per ascoltare”, so the transfer is blocked before our AP/SPIRC/AudioKey path. Alexa endpoints shown by that account are a different service integration class and are not treated as a protocol model for this usermod.
+
+A separate session-identity audit is documented in `docs/AUDIOKEY_IDENTITY_AUDIT.md`. dev.2n-r7 records the current identity fields but deliberately does not change them; the next AudioKey experiment must be evidence-driven and comparative against a current client implementation.
+
+## Frozen qualified areas
+
+Do not alter without new evidence: shared-I2S/ES8311/DMA, 44.1 kHz PCM ingress, Zeroconf/LoginBlob/persistence, AP DH/Shannon/stored-credential auth, keepalive/Mercury/SPIRC, TrackRef/direct-selection mapping, metadata, dev.2i RequestKey wire/correlation, dev.2l AP StreamChunk transport, and the r14 50 ms AP receive poll.
 
 ## Build/test workflow
 
-The source remains an external PlatformIO usermod (`wled-usermod-spotify = symlink://../wled-usermod-spotify`). Tests are data-driven through `tests/release_checks.tsv` and `tests/hardware_checks.tsv`; `tools/test_runner.sh` remains generic. Full WLED/PlatformIO compile and hardware behavior remain qualification steps on the target machine.
+The source remains an external PlatformIO usermod (`wled-usermod-spotify = symlink://../wled-usermod-spotify`). r1 proved that the dependency declared only inside the symlinked usermod manifest was not visible to the WLED target. r2 added `esphome/micro-vorbis@^0.1.0` explicitly to `[env:waveshare_spotify]`, but the real Arduino target still failed at the same include. That second result is consistent with PlatformIO framework compatibility filtering: upstream micro-vorbis is documented for PlatformIO with `framework = espidf`, while WLED builds this environment with Arduino. r3 therefore keeps the explicit dependency and adds `lib_compat_mode = off` **only to `waveshare_spotify`**, so the package can participate in LDF without changing WLED's framework. See `platformio_override.example.ini`. Decoder/runtime logic is unchanged from r1/r2.
 
-Manual controls remain `/spotify-session?action=stop|reset|probe` and `/spotify-test?action=start-pcm&tone=1000`.
+Tests are data-driven through `tests/release_checks.tsv` and `tests/hardware_checks.tsv`; `tools/test_runner.sh` remains generic.
+
+Host/prebuild regression command:
+
+```sh
+./tools/test_runner.sh --manifest tests/release_checks.tsv --phase prebuild --repo .
+```
+
+The full WLED/PlatformIO target compile is a separate required gate because the current workspace does not contain the complete WLED build tree/toolchain. In particular, `micro-vorbis` must be proven compatible with the target Arduino-on-ESP-IDF environment by the real target compile before dev.2n-r7 can be called hardware-qualified.
 
 ## Documentation
 
+- `docs/DEV2N_LOCAL_VORBIS.md` — local Ogg/Vorbis decoder design and hardware gate.
+- `docs/AUDIOKEY_IDENTITY_AUDIT.md` — frozen current AP identity and comparative AudioKey investigation plan.
+- `docs/DEV2M_MEDIA_KEY_BLOCK.md` — qualified media-key service-block hardening and r12-r14 history.
 - `docs/DEV2I_AUDIO_KEY.md` — RequestKey/candidate gate and independent librespot evidence.
-- `docs/DEV2J_MEDIA_HEAD.md` — ProductInfo investigation and confirmed `headFiles=0`.
-- `docs/DEV2K_SPCLIENT_TLS.md` — closed target-native TLS diagnostic.
 - `docs/DEV2L_AP_STREAM.md` — qualified bounded sequential AP StreamChunk transport.
-- `docs/DEV2M_MEDIA_KEY_BLOCK.md` — current service-block hardening gate.
-- `docs/NEXT_DEV2_CSPOT.md` — staged local decoder/decrypt continuation.
-- `THIRD_PARTY_NOTICES.md` — protocol/cryptographic provenance and licensing notes.
-
+- `docs/NEXT_DEV2_CSPOT.md` — staged continuation after the local decoder gate.
+- `THIRD_PARTY_NOTICES.md` — decoder/protocol/cryptographic provenance and licensing notes.
 
 ### r8 opaque context-player discriminator
 
@@ -99,3 +106,33 @@ Hardware r12 qualification on 2026-10-07: first track index 3 (`Mama, I'm Coming
 r13 added `SPIRC timing resolveLast/resolveMax/applyLast/applyMax` in microseconds and metadata `rtt/maxRtt` in milliseconds. Hardware measured two direct taps at `resolveLast=38630/36821 us` and `applyLast=47148/45287 us`; metadata RTT was 1503 ms then 255 ms. Since `apply` begins only once the SPIRC Load is received, the local direct-selection path is only about 45-47 ms and does not explain the perceived ~1 s tap-to-visible-change delay.
 
 r14 therefore changes only `SESSION_POLL_MS` from 250 ms to 50 ms, reducing the local idle receive-check ceiling by 200 ms without changing SPIRC parsing, selection, metadata, RequestKey suppression, StreamChunk or audio semantics. The latency itself is not a release blocker; the r14 hardware gate is primarily to prove no stability, reconnect, FPS or audio-sink regression.
+
+
+
+### dev.2n-r7 completion semantics after first hardware decode
+
+The r6 target compiled and linked successfully and the real board decoded the complete 10,437-byte fixture to exactly 88,200 PCM frames at 44.1 kHz stereo with `feedFail=0`. The only runtime failure was adapter bookkeeping: the final audio-producing call returned normal success (`0`) while consuming the final input bytes, so r6 labelled the run `missing-end-of-stream`. The upstream micro-vorbis basic loop itself terminates when caller input is exhausted and does not require a separate EOS result on that final call. r7 therefore accepts input exhaustion only when the **entire known fixture** was consumed, the format is valid, and the exact expected frame count was produced. Explicit EOS remains separately counted when reported.
+
+r7 also keeps `starts` cumulative across fixture runs so accidental duplicate GETs are observable. This matters because the r6 snapshot showed `PCM ingress inFrames=176400` and `flushes=2` while the per-run Vorbis telemetry showed 88,200 frames, strongly indicating the one-shot endpoint had been invoked twice in that boot.
+
+### dev.2n-r6 nested micro-ogg link bridge
+
+The real r5 target build reached the final firmware link, proving that the WLED script chain, private include bridge, Tremor sources and `ogg_vorbis_decoder.cpp` all compile under the Arduino target. Link then failed only on `micro_ogg::OggDemuxer` constructor/destructor/reset/data/packet symbols. Upstream micro-vorbis uses `microOggDemuxer` as a separate nested CMake subproject; PlatformIO's generic Arduino library builder compiles `micro-vorbis/src` but does not automatically descend into `micro-vorbis/lib/micro-ogg-demuxer/src`. 
+
+r6 extends the existing compatibility script with `env.BuildSources()` for **the bundled micro-ogg-demuxer source tree shipped inside the selected micro-vorbis package**. It does not fetch a second copy, patch `.pio/libdeps`, change the framework, or alter runtime decoder/Spotify logic. PlatformIO documents `BuildSources()` as the supported pre-script mechanism for adding external source directories to the firmware build.
+
+### dev.2n-r5 WLED script-chain correction
+
+The real r4 target compile exposed an integration error in the example override, not in WLED itself: assigning `extra_scripts` in `[env:waveshare_spotify]` replaced WLED's inherited `${scripts_defaults.extra_scripts}` list. That removed core pre-scripts such as `load_usermods.py`, and the build consequently failed earlier in `wled_espnow.cpp` because `wled.h` was no longer exported to library builders. r5 preserves the complete WLED script chain and appends the micro-vorbis compatibility bridge after it:
+
+```ini
+extra_scripts =
+  ${scripts_defaults.extra_scripts}
+  pre:../wled-usermod-spotify/tools/platformio_micro_vorbis_compat.py
+```
+
+No runtime source or qualified Spotify/audio behavior changes in r5.
+
+### dev.2n-r4 target-build bridge
+
+The real r3 compile advanced into `micro-vorbis` and exposed the next packaging mismatch: upstream private CMake include directories were absent under WLED/Arduino (`ogg/ogg.h` and `ivorbiscodec.h` not found). r4 adds only a PlatformIO pre-build include bridge (`tools/platformio_micro_vorbis_compat.py`) that discovers the installed dependency tree and appends its header roots to `CPPPATH`. The downloaded dependency is not patched and the WLED framework remains Arduino.

@@ -1,7 +1,7 @@
 {
   "name": "wled-usermod-spotify",
-  "version": "0.1.0-dev.2m-key-block-r14",
-  "description": "Spotify Connect media-key service-block hardening usermod for WLED on Waveshare ESP32-S3 RGB Matrix",
+  "version": "0.1.0-dev.2n-vorbis-r7",
+  "description": "Spotify Connect receiver + local Ogg/Vorbis decoder qualification usermod for WLED on Waveshare ESP32-S3 RGB Matrix",
   "keywords": [
     "wled",
     "spotify",
@@ -20,7 +20,16 @@
     "srcFilter": [
       "+<*.cpp>",
       "+<audio/*.cpp>",
-      "+<spotify/*.cpp>"
+      "+<spotify/*.cpp>",
+      "+<decoder/*.cpp>"
     ]
-  }
+  },
+  "dependencies": [
+    {
+      "owner": "esphome",
+      "name": "micro-vorbis",
+      "version": "^0.1.0",
+      "platforms": "espressif32"
+    }
+  ]
 }

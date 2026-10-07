@@ -52,7 +52,7 @@ assert "AudioKey candidate=" in ui
 assert "AudioKey candidates" in ui
 assert "keyBytes=" in ui
 assert "audioKeyHex" not in ui
-assert 'USERMOD_VERSION = "0.1.0-dev.2m-key-block"' in ui
-assert 'USERMOD_REVISION = "r14"' in ui
-assert "one RequestKey diagnostic scan per session -> media-key service-block latch/suppression -> qualified AP StreamChunk canary" in ui
+assert 'USERMOD_VERSION = "0.1.0-dev.2n-vorbis"' in ui
+assert 'USERMOD_REVISION = "r7"' in ui
+assert "scope=Spotify network remains frozen at encrypted StreamChunk; independent local Ogg/Vorbis -> PCM gate enabled; AES integration remains closed" in ui
 print("dev.2i-r2 audio-key candidate diagnostics contract: PASS")

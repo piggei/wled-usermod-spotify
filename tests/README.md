@@ -68,3 +68,7 @@ ProductInfo scheme/status/body evidence remains a hardware gate in
 ### dev.2m-r14 conservative AP receive poll
 
 `test_dev2m_r14_poll_optimization.py` guards the only scheduling change in r14: the idle AP receive poll is reduced from 250 ms to 50 ms while the r12 selection semantics and r13 timing instrumentation remain unchanged. The hardware gate is stability-first; latency improvement is desirable but not required.
+
+### dev.2n-r7 local Ogg/Vorbis gate
+
+`test_dev2n_vorbis_fixture_contract.py` guards the new decoder-only workstream. It reconstructs the checked-in synthetic fixture, verifies the Ogg/Vorbis identification/setup/comment headers and EOS page, confirms the 44.1 kHz stereo contract, requires the explicit `esphome/micro-vorbis ^0.1.0` manifest plus WLED-env dependency wiring, private include bridging, and bundled micro-ogg source bridging and verifies that decoded PCM is routed only through `enqueuePcm44100()`. r6 has now proven the target compile/link and audible decode path on hardware. r7 additionally guards the completion semantic learned from that run: exact full-fixture input exhaustion is a valid completion even if the last audio-producing call returns normal success rather than a separate EOS result, while explicit EOS remains classified separately.

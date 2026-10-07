@@ -5,7 +5,7 @@ h = (root / "spotify/SpotifySessionProbe.h").read_text()
 ui = (root / "usermod_spotify_connect.h").read_text()
 cpp = (root / "spotify/SpotifySessionProbe.cpp").read_text()
 
-assert 'USERMOD_REVISION = "r14"' in ui
+assert 'USERMOD_REVISION = "r7"' in ui
 assert 'SESSION_POLL_MS = 50u' in h
 assert 'delay(SESSION_POLL_MS);' in cpp
 assert 'poll=50ms' in ui

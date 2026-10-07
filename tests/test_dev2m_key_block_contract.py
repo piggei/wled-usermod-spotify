@@ -9,9 +9,9 @@ cpp = (root / "spotify/SpotifySessionProbe.cpp").read_text()
 ui = (root / "usermod_spotify_connect.h").read_text()
 manifest = (root / "tests/release_checks.tsv").read_text()
 
-assert lib["version"] == "0.1.0-dev.2m-key-block-r14"
-assert 'USERMOD_VERSION = "0.1.0-dev.2m-key-block"' in ui
-assert 'USERMOD_REVISION = "r14"' in ui
+assert lib["version"] == "0.1.0-dev.2n-vorbis-r7"
+assert 'USERMOD_VERSION = "0.1.0-dev.2n-vorbis"' in ui
+assert 'USERMOD_REVISION = "r7"' in ui
 
 # Latch is deliberately narrow: only a complete candidate scan where every result is 0x0e/0:1.
 assert "allRejected01" in cpp
@@ -44,7 +44,7 @@ assert "blockErr=" in ui
 assert "audioKeyHex" not in ui
 assert "service-blocked" in h
 
-scope = "scope=metadata -> one RequestKey diagnostic scan per session -> media-key service-block latch/suppression -> qualified AP StreamChunk canary; decrypt/decoder remain closed"
+scope = "scope=Spotify network remains frozen at encrypted StreamChunk; independent local Ogg/Vorbis -> PCM gate enabled; AES integration remains closed"
 assert scope in ui
 assert manifest.count(scope) >= 3
 
@@ -151,7 +151,7 @@ assert 'SPIRC control Notify sent=' in ui
 assert 'commandAcks=' in ui and 'recipientIgnored=' in ui
 assert 'duplicateLoadAcked=' in ui
 
-assert 'USERMOD_REVISION = "r14"' in manifest
+assert 'USERMOD_REVISION = "r7"' in manifest
 
 # r7: current Android field-19 payload is binary ContextPlayerState, not historical JSON.
 assert 'SPIRC_REPLACE = 0x21u' in cpp

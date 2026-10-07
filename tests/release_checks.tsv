@@ -8,8 +8,19 @@ LIB_ARCHIVE	prebuild	required	file_contains	library.json	"libArchive": false	Pla
 LIB_SRCDIR	prebuild	required	file_contains	library.json	"srcDir": "."	library source root is repository root
 LIB_AUDIO	prebuild	required	file_contains	library.json	+<audio/*.cpp>	audio translation units are included
 LIB_SPOTIFY	prebuild	required	file_contains	library.json	+<spotify/*.cpp>	Spotify translation units are included
-BUILD_LINE	prebuild	required	file_contains	usermod_spotify_connect.h	USERMOD_VERSION = "0.1.0-dev.2m-key-block"	functional development line is dev.2m media-key service-block hardening
-BUILD_REV	prebuild	required	file_contains	usermod_spotify_connect.h	USERMOD_REVISION = "r14"	revision marker is r14
+LIB_DECODER	prebuild	required	file_contains	library.json	+<decoder/*.cpp>	decoder translation units are included
+VORBIS_DEP	prebuild	required	file_contains	library.json	"name": "micro-vorbis"	micro-vorbis dependency is declared
+VORBIS_PLAYER_H	prebuild	required	file_exists	decoder/SpotifyVorbisFixturePlayer.h	present	local Vorbis fixture player interface is present
+VORBIS_PLAYER_CPP	prebuild	required	file_exists	decoder/SpotifyVorbisFixturePlayer.cpp	present	local Vorbis fixture player implementation is present
+VORBIS_FIXTURE	prebuild	required	file_exists	decoder/SpotifyVorbisFixture.h	present	bounded synthetic Ogg/Vorbis fixture is present
+VORBIS_ENDPOINT	prebuild	required	file_contains	usermod_spotify_connect.h	action == "start-vorbis"	local Vorbis one-shot endpoint is present
+VORBIS_PCM_SINK	prebuild	required	file_contains	decoder/SpotifyVorbisFixturePlayer.cpp	enqueuePcm44100	decoder feeds only the qualified 44.1 kHz PCM ingress
+VORBIS_CONTRACT	prebuild	required	python_script	tests/test_dev2n_vorbis_fixture_contract.py	exit=0	local Ogg/Vorbis fixture and adapter contract passes
+VORBIS_R7_COMPLETION	prebuild	required	python_script	tests/test_dev2n_r7_completion_contract.py	exit=0	r7 accepts exact fixture input/frame exhaustion while retaining explicit EOS telemetry
+VORBIS_DEP_WIRING	prebuild	required	python_script	tests/test_dev2n_r6_micro_ogg_link_bridge.py	exit=0	experimental WLED env preserves WLED core scripts, bridges private includes, and builds the bundled micro-ogg demuxer sources
+THIRD_PARTY_VORBIS	prebuild	required	file_contains	THIRD_PARTY_NOTICES.md	micro-vorbis local decoder dependency	micro-vorbis/Tremor licensing provenance is documented
+BUILD_LINE	prebuild	required	file_contains	usermod_spotify_connect.h	USERMOD_VERSION = "0.1.0-dev.2n-vorbis"	functional development line is dev.2n local Vorbis qualification
+BUILD_REV	prebuild	required	file_contains	usermod_spotify_connect.h	USERMOD_REVISION = "r7"	revision marker is dev.2n-r7
 ZEROCONF_GATE	prebuild	required	tree_contains	.	spotify-connect	Spotify mDNS discovery service is retained
 AUDIO_POLICY	prebuild	required	tree_contains	.	policy=shared 32-bit slave when owned+clocked	qualified 32-bit shared-I2S policy is retained
 PCM_INGRESS	prebuild	required	tree_contains	.	enqueuePcm44100	cspot-facing 44.1 kHz PCM ingress is present
@@ -60,7 +71,7 @@ SESSION_LOGIN_CMD	prebuild	required	file_contains	spotify/SpotifySessionProbe.cp
 SESSION_WELCOME_CMD	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp	AUTH_SUCCESSFUL_COMMAND = 0xACu	Spotify APWelcome command 0xAC is present
 SESSION_DECLINE_CMD	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp	AUTH_DECLINED_COMMAND = 0xADu	Spotify APLoginFailed command 0xAD is present
 SESSION_CREDENTIAL_GETTERS	prebuild	required	file_contains	spotify/SpotifyZeroConfProbe.h	const std::vector<uint8_t>& authData() const	qualified cached credential is exposed only to the AP session gate
-SESSION_SCOPE	prebuild	required	file_contains	usermod_spotify_connect.h	scope=metadata -> one RequestKey diagnostic scan per session -> media-key service-block latch/suppression -> qualified AP StreamChunk canary; decrypt/decoder remain closed	scope hardens one key scan per session while retaining the qualified AP/Shannon media canary
+SESSION_SCOPE	prebuild	required	file_contains	usermod_spotify_connect.h	scope=Spotify network remains frozen at encrypted StreamChunk; independent local Ogg/Vorbis -> PCM gate enabled; AES integration remains closed	scope separates frozen Spotify network path from the local Vorbis decoder gate
 THIRD_PARTY_CSPOT	prebuild	required	file_contains	THIRD_PARTY_NOTICES.md	GPL-3.0-or-later	cspot licensing note is accurate and does not repeat the earlier MIT assumption
 THIRD_PARTY_SHANNON	prebuild	required	file_contains	THIRD_PARTY_NOTICES.md	independent C++ implementation	Shannon implementation provenance is documented
 SESSION_PERSIST_CONTRACT	prebuild	required	python_script	tests/test_dev2f_session_contract.py	exit=0	persistent Shannon/Mercury protocol contract passes
@@ -143,13 +154,13 @@ DEV2M_SPIRC_PLAYBACK_UI	prebuild	required	file_contains	usermod_spotify_connect.
 FW_SPIRC_BLOCKED_NOTIFY	postbuild	required	firmware_contains	firmware	SPIRC blocked Notify attempts=	firmware contains blocked-state Notify diagnostics
 FW_SPIRC_STATE_QUEUE	postbuild	required	firmware_contains	firmware	SPIRC state tracks=	firmware contains current-SPIRC queue diagnostics
 FW_SPIRC_CONTROL	postbuild	required	firmware_contains	firmware	SPIRC control Notify sent=	firmware contains SPIRC controller command/ack diagnostics
-FW_VERSION	postbuild	required	firmware_contains	firmware	0.1.0-dev.2m-key-block	firmware contains dev.2m media-key hardening marker
-FW_REVISION	postbuild	required	firmware_contains	firmware	r14	firmware contains revision marker
-FW_ZEROCONF	postbuild	required	firmware_contains	firmware	Spotify media-key hardening gate	firmware contains media-key hardening marker
+FW_VERSION	postbuild	required	firmware_contains	firmware	0.1.0-dev.2n-vorbis	firmware contains dev.2n local Vorbis marker
+FW_REVISION	postbuild	required	firmware_contains	firmware	r7	firmware contains dev.2n-r7 revision marker
+FW_ZEROCONF	postbuild	required	firmware_contains	firmware	Spotify media-key hardening + local Vorbis gate	firmware contains current media-key/local-Vorbis state marker
 FW_AUDIO_POLICY	postbuild	required	firmware_contains	firmware	policy=shared 32-bit slave when owned+clocked	firmware contains qualified shared-I2S policy
 FW_PCM_INGRESS	postbuild	required	firmware_contains	firmware	PCM ingress 44100->	firmware contains PCM ingress diagnostics
 FW_LOGINBLOB	postbuild	required	firmware_contains	firmware	LoginBlob attempts=	firmware contains LoginBlob diagnostics
-FW_SESSION	postbuild	required	firmware_contains	firmware	scope=metadata -> one RequestKey diagnostic scan per session -> media-key service-block latch/suppression -> qualified AP StreamChunk canary; decrypt/decoder remain closed	firmware contains dev.2m media-key hardening scope
+FW_SESSION	postbuild	required	firmware_contains	firmware	scope=Spotify network remains frozen at encrypted StreamChunk; independent local Ogg/Vorbis -> PCM gate enabled; AES integration remains closed	firmware contains frozen-network/local-Vorbis scope marker
 FW_KEEPALIVE	postbuild	required	firmware_contains	firmware	keepalive ping=	firmware contains persistent keepalive diagnostics
 FW_MERCURY	postbuild	required	firmware_contains	firmware	Mercury SUB attempts=	firmware contains Mercury diagnostics
 FW_SPIRC	postbuild	required	firmware_contains	firmware	SPIRC hello attempts=	firmware contains SPIRC activation diagnostics
@@ -160,7 +171,7 @@ FW_MEDIA_KEY_STATE	postbuild	required	firmware_contains	firmware	MediaKey state=
 FW_AUDIO_KEY_CANDIDATES	postbuild	required	firmware_contains	firmware	AudioKey candidates	firmware contains dev.2i-r2 candidate diagnostics
 FW_PRODUCT_INFO	postbuild	required	firmware_contains	firmware	ProductInfo packets=	firmware contains ProductInfo/head-url diagnostics
 FW_MEDIA_HEAD	postbuild	required	firmware_contains	firmware	MediaHead attempts=	firmware contains bounded media-head diagnostics
-FW_AUDIO_KEY_SCOPE	postbuild	required	firmware_contains	firmware	scope=metadata -> one RequestKey diagnostic scan per session -> media-key service-block latch/suppression -> qualified AP StreamChunk canary; decrypt/decoder remain closed	firmware contains dev.2m media-key hardening scope
+FW_AUDIO_KEY_SCOPE	postbuild	required	firmware_contains	firmware	scope=Spotify network remains frozen at encrypted StreamChunk; independent local Ogg/Vorbis -> PCM gate enabled; AES integration remains closed	firmware contains frozen-network/local-Vorbis scope marker
 FW_NO_OLD_AR_BLOCK	postbuild	required	firmware_not_contains	firmware	blocked: AudioReactive owns shared I2S clocks	firmware does not contain obsolete AudioReactive blocker
 FW_NO_OLD_LRCK_BLOCK	postbuild	required	firmware_not_contains	firmware	blocked: shared LRCK active (AudioReactive/I2S0)	firmware does not contain obsolete LRCK blocker
 FW_AP_STREAM	postbuild	required	firmware_contains	firmware	AP Stream attempts=	firmware contains AP StreamChunk counters
@@ -194,3 +205,5 @@ DEV2M_CONTEXT_JSON_SKIP_TO	prebuild	required	file_contains	spotify/SpotifySessio
 DEV2M_CONTEXT_QUEUE_UI	prebuild	required	file_contains	usermod_spotify_connect.h	SPIRC contextQueue refs=	canonical classic-queue identity telemetry is exposed without identifiers
 DEV2M_CONTEXT_SKIP_UI	prebuild	required	file_contains	usermod_spotify_connect.h	SPIRC contextSkip objects=	multi-skip JSON target-resolution telemetry is exposed
 FW_CONTEXT_SKIP	postbuild	required	firmware_contains	firmware	SPIRC contextSkip objects=	firmware contains multi-skip target-resolution diagnostics
+FW_VORBIS_ENDPOINT	postbuild	required	firmware_contains	firmware	start-vorbis	firmware contains local Vorbis endpoint marker
+FW_VORBIS_TELEMETRY	postbuild	required	firmware_contains	firmware	vorbisFixture=	firmware contains local Vorbis telemetry

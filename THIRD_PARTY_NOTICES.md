@@ -115,3 +115,17 @@ full modern playlist-v2/connect-state command contract.
 ## ESP32-S3 ROM miniz interface
 
 The dev.2m-r9a diagnostic path uses the `miniz.h` low-level `tinfl_decompress` interface supplied by the Espressif ESP-IDF/ESP32-S3 ROM support already present in the target framework. The decompressor state is heap-allocated so the high-level helper does not consume the Spotify AP task stack. No miniz source code is vendored in this repository. Espressif's `esp_rom` miniz interface is distributed as part of ESP-IDF under its upstream licensing terms (header currently SPDX Apache-2.0).
+
+## micro-vorbis local decoder dependency (dev.2n)
+
+`dev.2n-r3` declares `esphome/micro-vorbis` v0.1.x as an external PlatformIO dependency for the local Ogg/Vorbis qualification gate. Because upstream declares/documents ESP-IDF integration while WLED uses Arduino-on-ESP-IDF, the dedicated test environment disables PlatformIO framework compatibility filtering with `lib_compat_mode = off`; the dependency source is **not vendored** in this repository.
+
+The upstream micro-vorbis C++ wrapper/component is published under Apache-2.0 and contains a fixed-point Tremor-derived decoder whose upstream/fork material is covered by its BSD-3-Clause notices. When packaging or redistributing the resolved dependency, preserve the dependency's own `LICENSE`, `NOTICE` and Tremor notices exactly as supplied upstream.
+
+Project code in `decoder/SpotifyVorbisFixturePlayer.*` is only an adapter from the dependency's public streaming decode API to the already-qualified `WavesharePcmOutput::enqueuePcm44100()` interface. `decoder/SpotifyVorbisFixture.h` is a project-generated synthetic 44.1 kHz stereo test tone and contains no third-party or Spotify media content.
+
+Upstream reference: `https://github.com/esphome-libs/micro-vorbis`.
+
+`micro-vorbis` also ships the `micro-ogg-demuxer` subproject used by its Ogg wrapper. That demuxer is Apache-2.0 licensed upstream. dev.2n-r6 only instructs PlatformIO to compile the copy already bundled inside the resolved micro-vorbis dependency (`lib/micro-ogg-demuxer/src`); it does not vendor another copy into this repository. Preserve the bundled micro-ogg-demuxer license when redistributing resolved dependency sources/binaries as required by its license.
+
+Upstream demuxer reference: `https://github.com/esphome-libs/micro-ogg-demuxer`.
