@@ -4,7 +4,17 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <vector>
+#include "SpotifyMetadataAudit.h"
+#include "SpotifyAudioKeyProbe.h"
 
+#include "../decoder/SpotifyApMediaChunkSource.h"
+#include "../decoder/SpotifyApContinuousRing.h"
+
+// dev.2n-r17 adds a bounded 64 KiB continuous encrypted AP transport diagnostic
+// above the qualified r16 key comparison. It never decrypts or decodes live bytes.
+// dev.2n-r16 added a manual, bounded primary/alternative key comparison. Diagnostic
+// results/keys never replace the normal target/latch or feed the live consumer.
+// The comments below describe the retained normal-path qualification history.
 // dev.2m-r14 conservative AP receive-poll optimization above the hardware-qualified r12
 // canonical classic-queue identity gate and r13 timing evidence. r14 does not alter selection semantics:
 // GID-only TrackRefs remain canonicalized to spotify:track URIs and context
@@ -96,6 +106,14 @@ public:
   size_t authResponseBytes() const { return authResponseBytes_; }
   uint8_t authLastCommand() const { return authLastCommand_; }
   uint32_t shannonMacFailures() const { return shannonMacFailures_; }
+  uint8_t credentialAuthType() const { return credentialAuthType_; }
+  uint64_t clientSpotifyVersion() const;
+  uint8_t clientProductClass() const;
+  uint8_t clientPlatformClass() const;
+  uint8_t authCpuClass() const;
+  uint8_t authOsClass() const;
+  const char* authSystemName() const;
+  const char* authClientVersion() const;
 
   uint32_t sessionStarts() const { return sessionStarts_; }
   uint32_t sessionUptimeMs() const;
@@ -224,6 +242,21 @@ public:
   uint32_t trackRefIndex() const { return trackRefIndex_; }
   const char* trackRefGidHex() const { return trackRefGidHex_; }
   const char* trackRefUri() const { return trackRefUri_; }
+  // r15 passive media-identity audit. Snapshot views are small and copied under
+  // a short critical section; protobuf parsing never runs with that lock held.
+  // Manual diagnostics use a separate state machine and never change the normal
+  // AudioKey target/latch or expose/retain a received key.
+  spotify_key_probe::Reason requestKeyProbe(uint32_t expectedGeneration, const uint8_t expectedGid[16]);
+  bool cancelKeyProbe();
+  void keyProbeSummary(spotify_key_probe::Summary& out, uint32_t& currentGeneration,
+                       bool& transportReady) const;
+  bool keyProbeResult(uint32_t run, uint8_t index, spotify_key_probe::Result& out) const;
+
+  void metadataAuditSummary(spotify_metadata_audit::Summary& out) const;
+  bool metadataAuditAlternative(uint32_t generation, uint8_t index,
+                                spotify_metadata_audit::TrackView& out) const;
+  bool metadataAuditKeyTarget(uint32_t generation, spotify_metadata_audit::KeyTarget& out) const;
+
   uint32_t metadataRequests() const { return metadataRequests_; }
   uint32_t metadataResponses() const { return metadataResponses_; }
   uint32_t metadataSuccesses() const { return metadataSuccesses_; }
@@ -303,6 +336,13 @@ public:
   const char* productInfoCatalogue() const { return productInfoCatalogue_; }
   const char* productInfoPlayerLicense() const { return productInfoPlayerLicense_; }
   const char* productInfoHeadFiles() const { return productInfoHeadFiles_; }
+  const char* productInfoOnDemand() const { return productInfoOnDemand_; }
+  const char* productInfoHighBitrate() const { return productInfoHighBitrate_; }
+  const char* productInfoUnrestricted() const { return productInfoUnrestricted_; }
+  const char* productInfoMobile() const { return productInfoMobile_; }
+  const char* productInfoPrefetchKeys() const { return productInfoPrefetchKeys_; }
+  const char* productInfoKeyMemoryCacheMode() const { return productInfoKeyMemoryCacheMode_; }
+  const char* productInfoKeyCachingMaxCount() const { return productInfoKeyCachingMaxCount_; }
   bool headFileTemplateAvailable() const { return headFileTemplate_[0] != '\0'; }
   const char* headFileScheme() const { return headFileScheme_; }
   uint32_t mediaHeadAttempts() const { return mediaHeadAttempts_; }
@@ -340,9 +380,89 @@ public:
   uint32_t apStreamReportedFileBytes() const { return apStreamReportedFileBytes_; }
   uint32_t apStreamDataPackets() const { return apStreamDataPackets_; }
   size_t apStreamDataBytes() const { return apStreamDataBytes_; }
+  uint32_t apStreamCipherHash() const { return apStreamCipherHash_; }
+  size_t apStreamCipherBytesHashed() const { return apStreamCipherBytesHashed_; }
+  uint8_t apStreamSourceChunks() const { return apStreamSourceChunks_; }
+  uint8_t apStreamSourceChunkMismatches() const { return apStreamSourceChunkMismatches_; }
+  bool apStreamSourceContractReady() const {
+    return apStreamSourceChunks_ == AP_STREAM_PROBE_COUNT &&
+           apStreamSourceChunkMismatches_ == 0u &&
+           apStreamCipherBytesHashed_ == AP_STREAM_CANARY_BYTES * AP_STREAM_PROBE_COUNT;
+  }
+  bool apStreamLiveSourceReady() const { return apStreamMediaSource_.ready(); }
+  bool apStreamLiveSourceValid() const { return apStreamMediaSource_.valid(); }
+  size_t apStreamLiveSourceRetainedBytes() const { return apStreamMediaSource_.retainedBytes(); }
+  size_t apStreamLiveSourceCapacityBytes() const { return apStreamMediaSource_.capacityBytes(); }
+  uint32_t apStreamLiveSourceChunks() const { return apStreamMediaSource_.chunksCaptured(); }
+  uint32_t apStreamLiveSourceFragments() const { return apStreamMediaSource_.fragmentsCaptured(); }
+  uint32_t apStreamLiveSourceFailures() const { return apStreamMediaSource_.captureFailures(); }
+  const char* apStreamLiveSourceStorage() const { return apStreamMediaSource_.storageName(); }
+  uint32_t apStreamLiveVerifyAttempts() const { return apStreamLiveVerifyAttempts_; }
+  uint32_t apStreamLiveVerifySuccesses() const { return apStreamLiveVerifySuccesses_; }
+  uint32_t apStreamLiveVerifyFailures() const { return apStreamLiveVerifyFailures_; }
+  uint32_t apStreamLiveVerifyReadCalls() const { return apStreamLiveVerifyReadCalls_; }
+  uint32_t apStreamLiveVerifyChunks() const { return apStreamLiveVerifyChunks_; }
+  size_t apStreamLiveVerifyBytes() const { return apStreamLiveVerifyBytes_; }
+  uint32_t apStreamLiveVerifyHash() const { return apStreamLiveVerifyHash_; }
+  bool apStreamLiveVerifyHashMatch() const { return apStreamLiveVerifyHashMatch_; }
+  bool apStreamLiveVerifyEof() const { return apStreamLiveVerifyEof_; }
+  bool apStreamLiveVerifyRewound() const { return apStreamLiveVerifyRewound_; }
+  bool apStreamLiveKeyGateEligible() const { return audioKeyBytes_ == 16u && audioKeySuccesses_ != 0u; }
   bool apStreamHeadersComplete() const { return apStreamHeadersComplete_; }
   int32_t apStreamCandidateFormat() const { return apStreamCandidateFormat_; }
   const char* apStreamLastError() const { return apStreamLastError_; }
+
+  const char* apContinuousStateName() const {
+    if (!apContinuousAttemptedForTrack_) return "idle";
+    if (apContinuousComplete_) return "complete";
+    if (apContinuousPending_) return "active";
+    return "failed";
+  }
+  uint32_t apContinuousAttempts() const { return apContinuousAttempts_; }
+  uint32_t apContinuousSuccesses() const { return apContinuousSuccesses_; }
+  uint32_t apContinuousFailures() const { return apContinuousFailures_; }
+  uint32_t apContinuousTimeouts() const { return apContinuousTimeouts_; }
+  uint32_t apContinuousProtocolErrors() const { return apContinuousProtocolErrors_; }
+  uint32_t apContinuousStalePackets() const { return apContinuousStalePackets_; }
+  uint32_t apContinuousPostCompletePackets() const { return apContinuousPostCompletePackets_; }
+  uint32_t apContinuousTrackChangeCancels() const { return apContinuousTrackChangeCancels_; }
+  bool apContinuousPending() const { return apContinuousPending_; }
+  bool apContinuousComplete() const { return apContinuousComplete_; }
+  uint16_t apContinuousChannelId() const { return apContinuousChannelId_; }
+  uint8_t apContinuousRangeCount() const { return AP_CONTINUOUS_RANGE_COUNT; }
+  uint8_t apContinuousCompletedRanges() const { return apContinuousCompletedRanges_; }
+  uint32_t apContinuousCurrentOffsetBytes() const {
+    return static_cast<uint32_t>(apContinuousRangeIndex_) * AP_CONTINUOUS_RANGE_BYTES;
+  }
+  size_t apContinuousRangeBytes() const { return AP_CONTINUOUS_RANGE_BYTES; }
+  size_t apContinuousTargetBytes() const { return AP_CONTINUOUS_TARGET_BYTES; }
+  uint32_t apContinuousResponsePackets() const { return apContinuousResponsePackets_; }
+  uint8_t apContinuousLastCommand() const { return apContinuousLastCommand_; }
+  uint16_t apContinuousFailureCode() const { return apContinuousFailureCode_; }
+  uint32_t apContinuousHeaderCount() const { return apContinuousHeaderCount_; }
+  size_t apContinuousHeaderBytes() const { return apContinuousHeaderBytes_; }
+  uint32_t apContinuousReportedFileBytes() const { return apContinuousReportedFileBytes_; }
+  uint32_t apContinuousDataPackets() const { return apContinuousDataPackets_; }
+  size_t apContinuousDataBytes() const { return apContinuousDataBytes_; }
+  uint32_t apContinuousProducerHash() const { return apContinuousProducerHash_; }
+  uint32_t apContinuousConsumerHash() const { return apContinuousConsumerHash_; }
+  size_t apContinuousConsumerBytes() const { return apContinuousConsumerBytes_; }
+  uint32_t apContinuousConsumerReads() const { return apContinuousConsumerReads_; }
+  bool apContinuousHashMatch() const { return apContinuousHashMatch_; }
+  bool apContinuousEof() const { return apContinuousEof_; }
+  size_t apContinuousRingCapacityBytes() const { return apContinuousRing_.capacityBytes(); }
+  size_t apContinuousRingBufferedBytes() const { return apContinuousRing_.bufferedBytes(); }
+  size_t apContinuousRingHighWaterBytes() const { return apContinuousRing_.highWaterBytes(); }
+  size_t apContinuousRingProducedBytes() const { return apContinuousRing_.producedBytes(); }
+  size_t apContinuousRingConsumedBytes() const { return apContinuousRing_.consumedBytes(); }
+  uint32_t apContinuousRingBackpressure() const { return apContinuousRing_.backpressureEvents(); }
+  uint32_t apContinuousRingGapErrors() const { return apContinuousRing_.gapErrors(); }
+  uint32_t apContinuousRingDuplicateErrors() const { return apContinuousRing_.duplicateErrors(); }
+  uint32_t apContinuousRingProducerErrors() const { return apContinuousRing_.producerErrors(); }
+  bool apContinuousRingValid() const { return apContinuousRing_.valid(); }
+  const char* apContinuousRingStorage() const { return apContinuousRing_.storageName(); }
+  int32_t apContinuousCandidateFormat() const { return apContinuousCandidateFormat_; }
+  const char* apContinuousLastError() const { return apContinuousLastError_; }
 
   uint32_t reconnectAttempts() const { return reconnectAttempts_; }
   uint32_t reconnectSuccesses() const { return reconnectSuccesses_; }
@@ -354,6 +474,31 @@ public:
   UBaseType_t stackMinFree() const { return stackMinFree_; }
 
 private:
+  void openKeyProbeSession();
+  void closeKeyProbeSession(spotify_key_probe::Reason reason);
+  bool takeKeyProbeRequest(spotify_key_probe::Request& out, bool maySend);
+  void finishKeyProbeWrite(uint32_t sequence, bool ok);
+  bool consumeKeyProbeResponse(uint8_t command, std::vector<uint8_t>& payload);
+  // Protected by metadataAuditMux_, so a posted generation and its candidate
+  // snapshot are atomic. Lifetime is the boot, not an AP reconnect/reset.
+  spotify_key_probe::Probe keyProbe_;
+  uint32_t keyProbeSession_ = 0u;
+  bool keyProbeReady_ = false;
+
+  void clearMetadataAudit(spotify_metadata_audit::Status status, const uint8_t* requestedGid = nullptr,
+                          bool clearStatistics = false);
+  void auditMetadataPayload(const std::vector<uint8_t>& payload);
+  void recordMetadataKeyTarget(const uint8_t* gid, const uint8_t* file, uint32_t sequence, bool sent);
+  void metadataAuditHttpError();
+  mutable portMUX_TYPE metadataAuditMux_ = portMUX_INITIALIZER_UNLOCKED;
+  spotify_metadata_audit::Report metadataAudit_{};
+  spotify_metadata_audit::KeyTarget metadataAuditTarget_{};
+  uint32_t metadataAuditGeneration_ = 0u;
+  uint32_t metadataAuditAttempts_ = 0u;
+  uint32_t metadataAuditFailures_ = 0u;
+  uint32_t metadataAuditLastUs_ = 0u;
+  uint32_t metadataAuditMaxUs_ = 0u;
+
   static constexpr uint32_t AUTO_DELAY_MS = 3500u;
   static constexpr uint32_t CONNECT_TIMEOUT_MS = 5000u;
   static constexpr uint32_t IO_TIMEOUT_MS = 7000u;
@@ -369,6 +514,13 @@ private:
   static constexpr uint32_t AP_STREAM_WORD_BYTES = 4u;
   static constexpr uint32_t AP_STREAM_CANARY_WORDS = AP_STREAM_CANARY_BYTES / AP_STREAM_WORD_BYTES;
   static constexpr uint32_t AP_STREAM_TIMEOUT_MS = 5000u;
+  static constexpr size_t AP_CONTINUOUS_RANGE_BYTES = 4096u;
+  static constexpr uint8_t AP_CONTINUOUS_RANGE_COUNT = 16u;
+  static constexpr size_t AP_CONTINUOUS_TARGET_BYTES =
+      AP_CONTINUOUS_RANGE_BYTES * AP_CONTINUOUS_RANGE_COUNT;
+  static constexpr uint32_t AP_CONTINUOUS_RANGE_WORDS =
+      AP_CONTINUOUS_RANGE_BYTES / AP_STREAM_WORD_BYTES;
+  static constexpr uint32_t AP_CONTINUOUS_TIMEOUT_MS = 5000u;
   static constexpr uint32_t MAX_AUTO_RECONNECTS = 5u;
   static constexpr size_t MAX_AP_PLAIN_PACKET = 16384u;
   static constexpr size_t MAX_AP_ENCRYPTED_PACKET = 16384u;
@@ -384,6 +536,8 @@ private:
   bool fetchMediaHeadCandidate(uint8_t candidateIndex);
   void setMediaHeadError(const char* text);
   void setApStreamError(const char* text);
+  void setApContinuousError(const char* text);
+  void clearApContinuousTrackState();
   void setError(const char* text);
   void setEndpoint(const String& endpoint);
   void setResolverMode(const char* mode);
@@ -639,6 +793,13 @@ private:
   char productInfoCatalogue_[20] = "none";
   char productInfoPlayerLicense_[20] = "none";
   char productInfoHeadFiles_[12] = "none";
+  char productInfoOnDemand_[12] = "none";
+  char productInfoHighBitrate_[12] = "none";
+  char productInfoUnrestricted_[12] = "none";
+  char productInfoMobile_[12] = "none";
+  char productInfoPrefetchKeys_[12] = "none";
+  char productInfoKeyMemoryCacheMode_[32] = "none";
+  char productInfoKeyCachingMaxCount_[20] = "none";
   char headFileTemplate_[192] = {0};
   char headFileScheme_[8] = "none";
   uint32_t mediaHeadAttempts_ = 0u;
@@ -677,11 +838,64 @@ private:
   uint32_t apStreamDataPackets_ = 0u;
   size_t apStreamDataBytes_ = 0u;
   size_t apStreamCurrentDataBytes_ = 0u;
+  uint32_t apStreamCipherHash_ = 2166136261u;
+  size_t apStreamCipherBytesHashed_ = 0u;
+  uint8_t apStreamSourceChunks_ = 0u;
+  uint8_t apStreamSourceChunkMismatches_ = 0u;
+  SpotifyApMediaChunkSource apStreamMediaSource_;
+  uint32_t apStreamLiveVerifyAttempts_ = 0u;
+  uint32_t apStreamLiveVerifySuccesses_ = 0u;
+  uint32_t apStreamLiveVerifyFailures_ = 0u;
+  uint32_t apStreamLiveVerifyReadCalls_ = 0u;
+  uint32_t apStreamLiveVerifyChunks_ = 0u;
+  size_t apStreamLiveVerifyBytes_ = 0u;
+  uint32_t apStreamLiveVerifyHash_ = 2166136261u;
+  bool apStreamLiveVerifyHashMatch_ = false;
+  bool apStreamLiveVerifyEof_ = false;
+  bool apStreamLiveVerifyRewound_ = false;
   int32_t apStreamCandidateFormat_ = -1;
   bool apStreamHeadersComplete_ = false;
   bool apStreamPending_ = false;
   bool apStreamAttemptedForTrack_ = false;
   char apStreamLastError_[96] = "none";
+
+  uint32_t apContinuousAttempts_ = 0u;
+  uint32_t apContinuousSuccesses_ = 0u;
+  uint32_t apContinuousFailures_ = 0u;
+  uint32_t apContinuousTimeouts_ = 0u;
+  uint32_t apContinuousProtocolErrors_ = 0u;
+  uint32_t apContinuousStalePackets_ = 0u;
+  uint32_t apContinuousPostCompletePackets_ = 0u;
+  uint32_t apContinuousTrackChangeCancels_ = 0u;
+  uint16_t apContinuousChannelId_ = 0u;
+  uint16_t apContinuousLastCompletedChannelId_ = 0xffffu;
+  uint8_t apContinuousTrackGid_[16] = {0};
+  uint8_t apContinuousRangeIndex_ = 0u;
+  uint8_t apContinuousCompletedRanges_ = 0u;
+  uint32_t apContinuousRequestedAtMs_ = 0u;
+  size_t apContinuousRequestBytes_ = 0u;
+  uint32_t apContinuousResponsePackets_ = 0u;
+  uint8_t apContinuousLastCommand_ = 0u;
+  uint16_t apContinuousFailureCode_ = 0u;
+  uint32_t apContinuousHeaderCount_ = 0u;
+  size_t apContinuousHeaderBytes_ = 0u;
+  uint32_t apContinuousReportedFileBytes_ = 0u;
+  uint32_t apContinuousDataPackets_ = 0u;
+  size_t apContinuousDataBytes_ = 0u;
+  size_t apContinuousCurrentDataBytes_ = 0u;
+  uint32_t apContinuousProducerHash_ = 2166136261u;
+  uint32_t apContinuousConsumerHash_ = 2166136261u;
+  size_t apContinuousConsumerBytes_ = 0u;
+  uint32_t apContinuousConsumerReads_ = 0u;
+  bool apContinuousHashMatch_ = false;
+  bool apContinuousEof_ = false;
+  SpotifyApContinuousRing apContinuousRing_;
+  int32_t apContinuousCandidateFormat_ = -1;
+  bool apContinuousHeadersComplete_ = false;
+  bool apContinuousPending_ = false;
+  bool apContinuousAttemptedForTrack_ = false;
+  bool apContinuousComplete_ = false;
+  char apContinuousLastError_[96] = "none";
 
   uint32_t reconnectAttempts_ = 0u;
   uint32_t reconnectSuccesses_ = 0u;

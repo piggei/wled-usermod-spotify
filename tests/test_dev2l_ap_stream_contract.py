@@ -7,9 +7,9 @@ h = (root / "spotify/SpotifySessionProbe.h").read_text()
 ui = (root / "usermod_spotify_connect.h").read_text()
 lib = (root / "library.json").read_text()
 
-assert '"version": "0.1.0-dev.2n-vorbis-r7"' in lib
+assert '"version": "0.1.0-dev.2n-vorbis-r17"' in lib
 assert 'USERMOD_VERSION = "0.1.0-dev.2n-vorbis"' in ui
-assert 'USERMOD_REVISION = "r7"' in ui
+assert 'USERMOD_REVISION = "r17"' in ui
 
 # Historical AP media channel wire contract, implemented independently.
 assert "STREAM_CHUNK_REQUEST_COMMAND = 0x08u" in cpp
@@ -72,7 +72,7 @@ assert "AP Stream attempts=" in ui and "probe=" in ui and "totalRequested=" in u
 
 # Keep postbuild manifest literals synchronized with the runtime scope string.
 manifest = (root / "tests/release_checks.tsv").read_text()
-expected_scope = "scope=Spotify network remains frozen at encrypted StreamChunk; independent local Ogg/Vorbis -> PCM gate enabled; AES integration remains closed"
+expected_scope = "scope=live AP encrypted canary retained transiently behind MediaChunkSource; hard key gate + live decrypt/decoder consumer remain closed"
 assert manifest.count(expected_scope) >= 3  # prebuild SESSION_SCOPE + postbuild FW_SESSION/FW_AUDIO_KEY_SCOPE
 assert "AP StreamChunk 4KiB encrypted canary; decrypt/decoder remain closed" not in manifest
 print("dev.2l-r2 sequential AP StreamChunk canary contract: PASS")

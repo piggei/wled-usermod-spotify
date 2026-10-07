@@ -1,0 +1,38 @@
+{
+  "baseline": "0.1.0-dev.2n-vorbis-r16",
+  "archive_sha256": "bf22759f46e36d53c04e89458e6fc1acbbd8a67f569891a308d0fde079e69f6c",
+  "files": {
+    "spotify/SpotifyAudioKeyProbe.cpp": "cfeaf5e0b03661d64acf3dde22a747763f75dd0e8d85bf6027ee638498bd42f6",
+    "spotify/SpotifyAudioKeyProbe.h": "035f6c711b8e253d029730f766faa3b9cc6d8e6dd05dc12dbb16b673ac6795ee",
+    "spotify/SpotifySessionKeyProbe.cpp": "003e5312f6a9378f1460bc88d2af95a2ae8fe71c76219830f25a2962771d47ae",
+    "spotify/SpotifyMetadataAudit.cpp": "83515a76db830901df44fd4745acd86d557aa8019ca511d91df122ab3fb6735c",
+    "spotify/SpotifyMetadataAudit.h": "8259bba4b5d0292a5a5e124a47b4fecb79b87e7551c126c3da98599542a1c458"
+  },
+  "blocks": {
+    "normal_key_sender": {
+      "start": "  auto sendAudioKeyCandidate =",
+      "end": "  auto advanceAudioKeyCandidate =",
+      "sha256": "c48cf1fe14f9010cadd6a6776ec96f83c5a2994aef10a0b32bdf05774b1176e6"
+    },
+    "normal_track_request": {
+      "start": "  auto sendTrackMetadataRequest =",
+      "end": "  auto sendAudioKeyCandidate =",
+      "sha256": "8bb8c98ff58931e0aad44135bfa34699527a2e1a64e9bde54a94fa38d1eee8b3"
+    },
+    "normal_idle_timeouts": {
+      "start": "    if (tcp.available() <= 0) {\n      if (audioKeyPending_",
+      "end": "    std::vector<uint8_t> payload;\n    bool liveMacOk",
+      "sha256": "faf61707cf346c61be0a4bf9df58c2eb875b8a479707a9cd06f69132dbcb4184"
+    },
+    "normal_canary_receiver": {
+      "start": "    if (liveCommand == STREAM_CHUNK_SUCCESS_COMMAND ||",
+      "end": "    if (liveCommand == AES_KEY_COMMAND || liveCommand == AES_KEY_ERROR_COMMAND)",
+      "sha256": "fea58f7ef8f114134f0f7b2f3f54dc4a5607146627ae7b294230e2fed28cd51a"
+    },
+    "normal_key_response": {
+      "start": "    if (liveCommand == AES_KEY_COMMAND || liveCommand == AES_KEY_ERROR_COMMAND)",
+      "end": "    if (liveCommand == PRODUCT_INFO_COMMAND)",
+      "sha256": "20a3ca7164628981e6eaef671ead29065d96358531c3b0e35260ff0531b77b9e"
+    }
+  }
+}

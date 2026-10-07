@@ -1,0 +1,65 @@
+{
+  "baseline": "0.1.0-dev.2n-vorbis-r14",
+  "archive_sha256": "64930a5b63c7518ad174de3e7048577d7b18859412397de745d395375e480b91",
+  "files": {
+    "decoder/SpotifyApMediaChunkSource.h": "8146bdd539a5c92ef7517e00293f3a1b3739559d320f36f50a11f6522fa16d1d",
+    "decoder/SpotifyVorbisFixturePlayer.h": "2127c6c4d260ac1ba94ff0618169e680f962da0c54fd0f63051f359bd2f4f2cf",
+    "decoder/SpotifyVorbisFixture.h": "44f83265f8ce3c277600753fe7f6b1d64fad5faa6f293f54219103429c7ee7d2",
+    "decoder/SpotifyApMediaChunkSource.cpp": "4c5d8df93b1feb2d261e2e2bbd173aff873236cff5ba7f507ce4ae82b1bbb347",
+    "decoder/SpotifyAudioAesCtr.h": "52490353f2e70bf82a14259d6db741174645682a878aafc906de160e1c87a31c",
+    "decoder/SpotifyVorbisFixturePlayer.cpp": "430bc9e72d043f66dff19bee6f48187b4eb0c6bf85bc5bccafd40e2ce940433f",
+    "decoder/SpotifyMediaChunkSource.h": "1da6624a1d46a11468eca3c2ab0abda30e772be5644d2215d3239d34a8221353",
+    "decoder/SpotifyAudioAesCtr.cpp": "1cf7b3580a466ec5731ffcfee54b58b187318301e70ae288905c1b63229cc86f",
+    "decoder/SpotifyVorbisEncryptedFixture.h": "aaed7b647423978a8268a16fb3bfb3a49ae0aa7b92955398a77f5b81d8be995a",
+    "tools/platformio_micro_vorbis_compat.py": "c8eba1ba275aa29f5bc373bda4506ba7ffc24852f4ae75acf69034eaf7c29a0d",
+    "spotify/SpotifyPcmTestSource.h": "0253e329139a31b9c8ce05b7b42aa7df7a35bc2188a41a71cc42e8d08f324afd",
+    "spotify/SpotifyShannon.cpp": "4e116a790a7202b780a9b697df52842e5593fe09d69e1d79d2ddb481418fbfb7",
+    "spotify/SpotifyZeroConfProbe.h": "e13992c7ed8169d86316579ac9f554fb5ea3de1c340a77a569487e4f5741965b",
+    "spotify/SpotifyShannon.h": "595e7d93884bd7e9ee288adbe7e2cfd3f4dbceb79a5af950d6123e0fe96b8983",
+    "spotify/SpotifyPcmTestSource.cpp": "cc07d7cd906c0970497fc995938c410b14c60cc8d7b96f79a75b850e0b83ccb7",
+    "spotify/SpotifyZeroConfProbe.cpp": "771aaa259504d8e82ac259b8a91a57cd7f61a8ee5dc613c9b573a54d09b269c8",
+    "platformio_override.example.ini": "cc87c0d4356fd4e6b5eb59210ae9fd733bcfde2808aa3c74c2643fe521b5cd85",
+    "audio/ES8311Codec.cpp": "1e1bd5cbfb82f83532ff26900b4982b798deaec75c9e43057cf44daf5c7ff333",
+    "audio/WavesharePcmOutput.h": "d2b05868c657aa83b0fa1fc65c1c6844d598c4c3f6784e321fad7c94b769e3cf",
+    "audio/SpotifyAudioConfig.h": "2ad48aa43adc99674f6f91abd808fe1a5d2a20be47d3e8e9c777d9fcd0200a06",
+    "audio/WavesharePcmOutput.cpp": "c8680bb35cc8293153af0d1f8621356500b19f1bc7299ec1c5cf1f0d3feb6aa0",
+    "audio/ES8311Codec.h": "ff3a4619bdd7a52d907c64670bc050d09a3c043227ec6a0fe1721cb036cf1a4f"
+  },
+  "blocks": {
+    "hello": {
+      "start": "std::vector<uint8_t> buildClientHello(",
+      "end": "std::vector<uint8_t> buildClientResponsePlaintext(",
+      "sha256": "c227d84182930e0c5cb7afc5565285255076a5e782025403ef86bb1a87b12ebe"
+    },
+    "auth": {
+      "start": "std::vector<uint8_t> buildAuthRequest(",
+      "end": "void appendBe16(",
+      "sha256": "7ba8f6d05571d2e64ec007ce76fc5b8d757230bceebafb80cbe2e48273e48783"
+    },
+    "request_key": {
+      "start": "std::vector<uint8_t> buildAudioKeyRequest(",
+      "end": "std::vector<uint8_t> buildApStreamChunkRequest(",
+      "sha256": "54c8ee1badf30185b5ea1e727b5b4bd33b3584985b3b5bfc5392087edeefd305"
+    },
+    "stream_request": {
+      "start": "std::vector<uint8_t> buildApStreamChunkRequest(",
+      "end": "struct LegacyTrackMetadataInfo",
+      "sha256": "c604d2adb637e68b12313fc6eba59ca8b30960625873d7f0ea922058b744314d"
+    },
+    "legacy_metadata": {
+      "start": "struct LegacyTrackMetadataInfo",
+      "end": "std::vector<uint8_t> buildSpircCapability(",
+      "sha256": "8be35c9db5eb1784b76daebbb26ebfdd615637696a514f91af92ac0fd8d12bff"
+    },
+    "candidate_advance": {
+      "start": "  auto advanceAudioKeyCandidate =",
+      "end": "  while (!stopRequested_) {",
+      "sha256": "6321de64542eb4e972723d01d52e8e14658055fbe669d630a83532409c2065b5"
+    },
+    "key_response": {
+      "start": "    if (liveCommand == AES_KEY_COMMAND || liveCommand == AES_KEY_ERROR_COMMAND)",
+      "end": "    if (liveCommand == PRODUCT_INFO_COMMAND)",
+      "sha256": "20a3ca7164628981e6eaef671ead29065d96358531c3b0e35260ff0531b77b9e"
+    }
+  }
+}

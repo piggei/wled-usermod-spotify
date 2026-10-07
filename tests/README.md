@@ -72,3 +72,48 @@ ProductInfo scheme/status/body evidence remains a hardware gate in
 ### dev.2n-r7 local Ogg/Vorbis gate
 
 `test_dev2n_vorbis_fixture_contract.py` guards the new decoder-only workstream. It reconstructs the checked-in synthetic fixture, verifies the Ogg/Vorbis identification/setup/comment headers and EOS page, confirms the 44.1 kHz stereo contract, requires the explicit `esphome/micro-vorbis ^0.1.0` manifest plus WLED-env dependency wiring, private include bridging, and bundled micro-ogg source bridging and verifies that decoded PCM is routed only through `enqueuePcm44100()`. r6 has now proven the target compile/link and audible decode path on hardware. r7 additionally guards the completion semantic learned from that run: exact full-fixture input exhaustion is a valid completion even if the last audio-producing call returns normal success rather than a separate EOS result, while explicit EOS remains classified separately.
+
+### dev.2n-r8 4096-byte chunked-input gate
+
+`test_dev2n_r8_chunked_stream_contract.py` preserves the hardware-qualified r7 contiguous path and adds the transport-shaped local replay. It requires `start-vorbis-chunked`, 4096-byte source deliveries, an 8192-byte staging buffer with tail compaction, chunk/refill telemetry, and strict full-input/full-frame completion. The host test reconstructs the 10,437-byte fixture and proves it splits exactly as 4096 + 4096 + 2245 bytes; it also verifies that at least two Ogg pages cross 4096-byte boundaries, so the hardware gate genuinely exercises incremental page/packet reconstruction rather than page-aligned chunks.
+
+### dev.2n-r9 AES-CTR gate
+
+`test_dev2n_r9_aes_ctr_pipeline.py` validates the local encrypted-fixture contract without third-party Python packages. It checks the exact plaintext/ciphertext fixture hashes, the first-block CTR keystream oracle, the fixed legacy Spotify audio IV in `SpotifyAudioAesCtr`, the mbedTLS AES-128-CTR implementation, the 4096-byte chunk adapter, the AES test endpoint and crypto telemetry markers. The fixture key is synthetic/public and is not a Spotify AudioKey.
+
+### dev.2n-r10 macro-collision gate
+
+`test_dev2n_r10_aes_macro_safe.py` prevents reuse of the ESP32-S3 HAL macro token `IV_BYTES` as a C++ member after including mbedTLS AES. It requires the macro-safe `kIvBytes` / `kKeyBytes` identifiers while preserving the r9 AES-CTR telemetry contract.
+
+
+### dev.2n-r11 MediaChunkSource / AP pre-decrypt gate
+
+`test_dev2n_r11_media_source_contract.py` preserves the bounded `SpotifyMediaChunkSource` producer API, verifies that both plaintext and encrypted local chunked fixtures still use it, and keeps the independent AP rolling hash/byte/chunk-shape source-gate telemetry as a regression baseline. r12 may add a separate transient encrypted source, but this r11 gate must remain intact.
+
+### dev.2n-r12 transient AP MediaChunkSource / hard key fence
+
+`test_dev2n_r12_ap_buffered_source_contract.py` requires `SpotifyApMediaChunkSource` to implement the common `SpotifyMediaChunkSource` API with a fixed 3 x 4096-byte capacity, lazy PSRAM-preferred allocation, wipe-on-reset/invalidate semantics, fragment append/commit handling, and no key material. It also verifies that `SpotifySessionProbe` only fills the encrypted source from the qualified AP canary and that the live source is not connected to `SpotifyAudioAesCtr` or `SpotifyVorbisFixturePlayer`. `/json/info` must expose only counters/storage class plus `consumer=closed keyGate=...`.
+
+### dev.2n-r13 live source diagnostic consumer
+
+`test_dev2n_r13_live_source_verify_contract.py` requires the retained AP canary to be read only through the common `MediaChunkSource::next()` contract, compared against the independent rolling AP sourceGate by byte count/chunk count/FNV identity, and rewound afterward without opening AES/Vorbis. `/json/info` exposes only bounded counters/digest equality plus `decrypt=closed`; the r12 media consumer fence remains in place.
+
+### dev.2n-r14 AudioKey identity telemetry
+
+`test_dev2n_r14_audiokey_identity_telemetry.py` guards the measurement-only identity audit after r13 hardware-qualified the live `MediaChunkSource` consumer. It requires the previously qualified ClientHello/Auth identity values to remain unchanged, adds only bounded ProductInfo key/capability parsing, keeps the 42-byte RequestKey layout frozen, and proves the live AES/Vorbis consumer fence remains closed.
+
+
+## r16 manual key diagnostics
+
+`test_dev2n_r16_key_probe_native.py` compiles the actual allocation-free probe and
+extracts the unchanged RequestKey builder for execution. It covers plan bounds,
+strict format/identity checks, deadlines, sequence ownership, duplicate requests,
+cancellation, immutable tuple results and deterministic event interleavings.
+`test_dev2n_r16_adapter_native.py` executes the actual AP adapter and HTTP/JSON
+helper bodies with platform stubs; response buffers are checked for secure wiping
+and normal key counters/latch are checked for non-mutation. The host String stub
+asserts that no String allocation occurs inside the mux-protected sections.
+Set `SPOTIFY_PROBE_SANITIZERS=1` to enable ASan/UBSan on either native suite.
+These tests do not compile full WLED, run FreeRTOS scheduling, contact Spotify or
+prove hardware behavior. `test_dev2n_r16_probe_contract.py` additionally verifies
+frozen r14/r15 files/blocks, routing, limits, and current postbuild literals.

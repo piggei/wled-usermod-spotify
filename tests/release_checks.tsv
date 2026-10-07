@@ -12,15 +12,29 @@ LIB_DECODER	prebuild	required	file_contains	library.json	+<decoder/*.cpp>	decode
 VORBIS_DEP	prebuild	required	file_contains	library.json	"name": "micro-vorbis"	micro-vorbis dependency is declared
 VORBIS_PLAYER_H	prebuild	required	file_exists	decoder/SpotifyVorbisFixturePlayer.h	present	local Vorbis fixture player interface is present
 VORBIS_PLAYER_CPP	prebuild	required	file_exists	decoder/SpotifyVorbisFixturePlayer.cpp	present	local Vorbis fixture player implementation is present
+VORBIS_MEDIA_SOURCE_H	prebuild	required	file_exists	decoder/SpotifyMediaChunkSource.h	present	bounded media chunk producer interface is present
+AP_MEDIA_SOURCE_H	prebuild	required	file_exists	decoder/SpotifyApMediaChunkSource.h	present	bounded transient AP media source interface is present
+AP_MEDIA_SOURCE_CPP	prebuild	required	file_exists	decoder/SpotifyApMediaChunkSource.cpp	present	bounded transient AP media source implementation is present
 VORBIS_FIXTURE	prebuild	required	file_exists	decoder/SpotifyVorbisFixture.h	present	bounded synthetic Ogg/Vorbis fixture is present
 VORBIS_ENDPOINT	prebuild	required	file_contains	usermod_spotify_connect.h	action == "start-vorbis"	local Vorbis one-shot endpoint is present
 VORBIS_PCM_SINK	prebuild	required	file_contains	decoder/SpotifyVorbisFixturePlayer.cpp	enqueuePcm44100	decoder feeds only the qualified 44.1 kHz PCM ingress
 VORBIS_CONTRACT	prebuild	required	python_script	tests/test_dev2n_vorbis_fixture_contract.py	exit=0	local Ogg/Vorbis fixture and adapter contract passes
 VORBIS_R7_COMPLETION	prebuild	required	python_script	tests/test_dev2n_r7_completion_contract.py	exit=0	r7 accepts exact fixture input/frame exhaustion while retaining explicit EOS telemetry
+VORBIS_R8_CHUNKED	prebuild	required	python_script	tests/test_dev2n_r8_chunked_stream_contract.py	exit=0	r8 replays the validated fixture through bounded 4096-byte source deliveries and staging
+VORBIS_CHUNKED_ENDPOINT	prebuild	required	file_contains	usermod_spotify_connect.h	action == "start-vorbis-chunked"	chunked local Vorbis endpoint is present
+VORBIS_AES_CTR_CPP	prebuild	required	file_exists	decoder/SpotifyAudioAesCtr.cpp	present	legacy Spotify media AES-128-CTR transform is present
+VORBIS_AES_FIXTURE	prebuild	required	file_exists	decoder/SpotifyVorbisEncryptedFixture.h	present	local encrypted Vorbis fixture is present
+VORBIS_AES_ENDPOINT	prebuild	required	file_contains	usermod_spotify_connect.h	action == "start-vorbis-aes-chunked"	AES-CTR chunked local Vorbis endpoint is present
+VORBIS_R9_AES_CTR	prebuild	required	python_script	tests/test_dev2n_r9_aes_ctr_pipeline.py	exit=0	r9 validates fixed-IV AES-128-CTR chunk decrypt before Vorbis
+VORBIS_R10_AES_MACRO_SAFE	prebuild	required	python_script	tests/test_dev2n_r10_aes_macro_safe.py	exit=0	r10 avoids ESP32 HAL IV_BYTES macro collision while preserving AES-CTR contract
+VORBIS_R11_MEDIA_SOURCE	prebuild	required	python_script	tests/test_dev2n_r11_media_source_contract.py	exit=0	r11 MediaChunkSource and AP source-gate regression contract remains present
+VORBIS_R12_AP_BUFFERED_SOURCE	prebuild	required	python_script	tests/test_dev2n_r12_ap_buffered_source_contract.py	exit=0	r12 retains only the bounded encrypted AP canary behind MediaChunkSource while hard key/decode coupling remains closed
+VORBIS_R13_LIVE_VERIFY	prebuild	required	python_script	tests/test_dev2n_r13_live_source_verify_contract.py	exit=0	r13 verifies the live encrypted MediaChunkSource through next()/rewind without opening decrypt or decoder
+VORBIS_R14_IDENTITY	prebuild	required	python_script	tests/test_dev2n_r14_audiokey_identity_telemetry.py	exit=0	r14 exposes measurement-only AP/ProductInfo identity evidence while RequestKey and live decrypt remain frozen
 VORBIS_DEP_WIRING	prebuild	required	python_script	tests/test_dev2n_r6_micro_ogg_link_bridge.py	exit=0	experimental WLED env preserves WLED core scripts, bridges private includes, and builds the bundled micro-ogg demuxer sources
 THIRD_PARTY_VORBIS	prebuild	required	file_contains	THIRD_PARTY_NOTICES.md	micro-vorbis local decoder dependency	micro-vorbis/Tremor licensing provenance is documented
 BUILD_LINE	prebuild	required	file_contains	usermod_spotify_connect.h	USERMOD_VERSION = "0.1.0-dev.2n-vorbis"	functional development line is dev.2n local Vorbis qualification
-BUILD_REV	prebuild	required	file_contains	usermod_spotify_connect.h	USERMOD_REVISION = "r7"	revision marker is dev.2n-r7
+BUILD_REV	prebuild	required	file_contains	usermod_spotify_connect.h	USERMOD_REVISION = "r17"	revision marker is dev.2n-r17
 ZEROCONF_GATE	prebuild	required	tree_contains	.	spotify-connect	Spotify mDNS discovery service is retained
 AUDIO_POLICY	prebuild	required	tree_contains	.	policy=shared 32-bit slave when owned+clocked	qualified 32-bit shared-I2S policy is retained
 PCM_INGRESS	prebuild	required	tree_contains	.	enqueuePcm44100	cspot-facing 44.1 kHz PCM ingress is present
@@ -71,7 +85,7 @@ SESSION_LOGIN_CMD	prebuild	required	file_contains	spotify/SpotifySessionProbe.cp
 SESSION_WELCOME_CMD	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp	AUTH_SUCCESSFUL_COMMAND = 0xACu	Spotify APWelcome command 0xAC is present
 SESSION_DECLINE_CMD	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp	AUTH_DECLINED_COMMAND = 0xADu	Spotify APLoginFailed command 0xAD is present
 SESSION_CREDENTIAL_GETTERS	prebuild	required	file_contains	spotify/SpotifyZeroConfProbe.h	const std::vector<uint8_t>& authData() const	qualified cached credential is exposed only to the AP session gate
-SESSION_SCOPE	prebuild	required	file_contains	usermod_spotify_connect.h	scope=Spotify network remains frozen at encrypted StreamChunk; independent local Ogg/Vorbis -> PCM gate enabled; AES integration remains closed	scope separates frozen Spotify network path from the local Vorbis decoder gate
+SESSION_SCOPE	prebuild	required	file_contains	usermod_spotify_connect.h	scope=live AP encrypted canary retained transiently behind MediaChunkSource; hard key gate + live decrypt/decoder consumer remain closed	scope separates frozen Spotify network path from the local Vorbis decoder gate
 THIRD_PARTY_CSPOT	prebuild	required	file_contains	THIRD_PARTY_NOTICES.md	GPL-3.0-or-later	cspot licensing note is accurate and does not repeat the earlier MIT assumption
 THIRD_PARTY_SHANNON	prebuild	required	file_contains	THIRD_PARTY_NOTICES.md	independent C++ implementation	Shannon implementation provenance is documented
 SESSION_PERSIST_CONTRACT	prebuild	required	python_script	tests/test_dev2f_session_contract.py	exit=0	persistent Shannon/Mercury protocol contract passes
@@ -155,12 +169,16 @@ FW_SPIRC_BLOCKED_NOTIFY	postbuild	required	firmware_contains	firmware	SPIRC bloc
 FW_SPIRC_STATE_QUEUE	postbuild	required	firmware_contains	firmware	SPIRC state tracks=	firmware contains current-SPIRC queue diagnostics
 FW_SPIRC_CONTROL	postbuild	required	firmware_contains	firmware	SPIRC control Notify sent=	firmware contains SPIRC controller command/ack diagnostics
 FW_VERSION	postbuild	required	firmware_contains	firmware	0.1.0-dev.2n-vorbis	firmware contains dev.2n local Vorbis marker
-FW_REVISION	postbuild	required	firmware_contains	firmware	r7	firmware contains dev.2n-r7 revision marker
+FW_REVISION	postbuild	required	firmware_contains	firmware	r17	firmware contains dev.2n-r17 revision marker
+FW_VORBIS_CHUNKED_ENDPOINT	postbuild	required	firmware_contains	firmware	start-vorbis-chunked	firmware contains chunked local Vorbis endpoint marker
+FW_VORBIS_STREAM_TELEMETRY	postbuild	required	firmware_contains	firmware	vorbis stream mode=	firmware contains chunked-input transport telemetry
+FW_VORBIS_AES_ENDPOINT	postbuild	required	firmware_contains	firmware	start-vorbis-aes-chunked	firmware contains AES-CTR chunked local Vorbis endpoint
+FW_VORBIS_CRYPTO_TELEMETRY	postbuild	required	firmware_contains	firmware	vorbis crypto mode=	firmware contains local AES-CTR decoder telemetry
 FW_ZEROCONF	postbuild	required	firmware_contains	firmware	Spotify media-key hardening + local Vorbis gate	firmware contains current media-key/local-Vorbis state marker
 FW_AUDIO_POLICY	postbuild	required	firmware_contains	firmware	policy=shared 32-bit slave when owned+clocked	firmware contains qualified shared-I2S policy
 FW_PCM_INGRESS	postbuild	required	firmware_contains	firmware	PCM ingress 44100->	firmware contains PCM ingress diagnostics
 FW_LOGINBLOB	postbuild	required	firmware_contains	firmware	LoginBlob attempts=	firmware contains LoginBlob diagnostics
-FW_SESSION	postbuild	required	firmware_contains	firmware	scope=Spotify network remains frozen at encrypted StreamChunk; independent local Ogg/Vorbis -> PCM gate enabled; AES integration remains closed	firmware contains frozen-network/local-Vorbis scope marker
+FW_SESSION	postbuild	required	firmware_contains	firmware	scope=live AP encrypted canary retained transiently behind MediaChunkSource; hard key gate + live decrypt/decoder consumer remain closed	firmware contains frozen-network/local-Vorbis scope marker
 FW_KEEPALIVE	postbuild	required	firmware_contains	firmware	keepalive ping=	firmware contains persistent keepalive diagnostics
 FW_MERCURY	postbuild	required	firmware_contains	firmware	Mercury SUB attempts=	firmware contains Mercury diagnostics
 FW_SPIRC	postbuild	required	firmware_contains	firmware	SPIRC hello attempts=	firmware contains SPIRC activation diagnostics
@@ -170,13 +188,21 @@ FW_AUDIO_KEY	postbuild	required	firmware_contains	firmware	AudioKey requests=	fi
 FW_MEDIA_KEY_STATE	postbuild	required	firmware_contains	firmware	MediaKey state=	firmware contains dev.2m media-key block/suppression diagnostics
 FW_AUDIO_KEY_CANDIDATES	postbuild	required	firmware_contains	firmware	AudioKey candidates	firmware contains dev.2i-r2 candidate diagnostics
 FW_PRODUCT_INFO	postbuild	required	firmware_contains	firmware	ProductInfo packets=	firmware contains ProductInfo/head-url diagnostics
+FW_AP_IDENTITY	postbuild	required	firmware_contains	firmware	AP identity product=	firmware contains measurement-only AP identity diagnostics
+FW_PRODUCT_KEYCAPS	postbuild	required	firmware_contains	firmware	ProductInfo keyCaps onDemand=	firmware contains bounded ProductInfo key capability diagnostics
+FW_AUDIOKEY_ID_AUDIT	postbuild	required	firmware_contains	firmware	AudioKey identityAudit requestWire=frozen	firmware contains frozen RequestKey identity-audit marker
 FW_MEDIA_HEAD	postbuild	required	firmware_contains	firmware	MediaHead attempts=	firmware contains bounded media-head diagnostics
-FW_AUDIO_KEY_SCOPE	postbuild	required	firmware_contains	firmware	scope=Spotify network remains frozen at encrypted StreamChunk; independent local Ogg/Vorbis -> PCM gate enabled; AES integration remains closed	firmware contains frozen-network/local-Vorbis scope marker
+FW_AUDIO_KEY_SCOPE	postbuild	required	firmware_contains	firmware	scope=live AP encrypted canary retained transiently behind MediaChunkSource; hard key gate + live decrypt/decoder consumer remain closed	firmware contains frozen-network/local-Vorbis scope marker
 FW_NO_OLD_AR_BLOCK	postbuild	required	firmware_not_contains	firmware	blocked: AudioReactive owns shared I2S clocks	firmware does not contain obsolete AudioReactive blocker
 FW_NO_OLD_LRCK_BLOCK	postbuild	required	firmware_not_contains	firmware	blocked: shared LRCK active (AudioReactive/I2S0)	firmware does not contain obsolete LRCK blocker
 FW_AP_STREAM	postbuild	required	firmware_contains	firmware	AP Stream attempts=	firmware contains AP StreamChunk counters
 FW_AP_STREAM_DETAIL	postbuild	required	firmware_contains	firmware	AP Stream channel=	firmware contains AP StreamChunk channel diagnostics
 FW_AP_STREAM_ERROR	postbuild	required	firmware_contains	firmware	AP Stream lastError=	firmware contains AP StreamChunk classified error diagnostics
+FW_AP_SOURCE_GATE	postbuild	required	firmware_contains	firmware	AP Stream sourceGate chunks=	firmware contains live encrypted source-gate telemetry
+FW_AP_LIVE_SOURCE	postbuild	required	firmware_contains	firmware	AP Stream liveSource source=ap-encrypted-canary contract=MediaChunkSource ready=	firmware contains bounded transient live-source telemetry
+FW_AP_LIVE_VERIFY	postbuild	required	firmware_contains	firmware	AP Stream liveVerify attempts=	firmware contains diagnostic live-source consumer verification telemetry
+FW_AP_LIVE_FENCE	postbuild	required	firmware_contains	firmware	consumer=closed keyGate=	firmware contains hard live decrypt/decoder fence telemetry
+FW_MEDIA_SOURCE_CONTRACT	postbuild	required	firmware_contains	firmware	contract=MediaChunkSource	firmware contains decoder producer-contract telemetry
 DEV2M_SPIRC_CONTEXT_PLAYER_PARSE	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp	parseContextPlayerState	bounded classic context_player_state parser exists
 DEV2M_SPIRC_CONTEXT_PLAYER_SELECT	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp	resolveContextPlayerSelection	context-player skip target is resolved against retained queue
 DEV2M_SPIRC_REPLACE	prebuild	required	file_contains	spotify/SpotifySessionProbe.cpp	SPIRC_REPLACE	classic Replace frames are classified and ACKed safely
@@ -207,3 +233,36 @@ DEV2M_CONTEXT_SKIP_UI	prebuild	required	file_contains	usermod_spotify_connect.h	
 FW_CONTEXT_SKIP	postbuild	required	firmware_contains	firmware	SPIRC contextSkip objects=	firmware contains multi-skip target-resolution diagnostics
 FW_VORBIS_ENDPOINT	postbuild	required	firmware_contains	firmware	start-vorbis	firmware contains local Vorbis endpoint marker
 FW_VORBIS_TELEMETRY	postbuild	required	firmware_contains	firmware	vorbisFixture=	firmware contains local Vorbis telemetry
+
+R15_AUDIT_HEADER	prebuild	required	file_exists	spotify/SpotifyMetadataAudit.h	present	bounded metadata diagnostic parser interface exists
+R15_AUDIT_CPP	prebuild	required	file_exists	spotify/SpotifyMetadataAudit.cpp	present	independent metadata diagnostic parser implementation exists
+R15_AUDIT_NATIVE	prebuild	required	python_script	tests/test_dev2n_r15_metadata_native.py	exit=0	actual C++ parser passes scenarios and deterministic mutation inputs
+R15_AUDIT_ADAPTER	prebuild	required	python_script	tests/test_dev2n_r15_adapter_syntax.py	exit=0	new adapter and UI compile against real declarations with host platform stubs
+R15_AUDIT_FREEZE	prebuild	required	python_script	tests/test_dev2n_r15_audit_contract.py	exit=0	r14 network/key/media files and blocks retain their byte hashes
+R15_AUDIT_DOC	prebuild	required	file_exists	docs/DEV2N_R15_METADATA_AUDIT.md	present	scope unknown semantics and hardware procedure documented
+FW_METADATA_AUDIT	postbuild	required	firmware_contains	firmware	Metadata audit state=	firmware includes the bounded metadata audit
+FW_METADATA_IDENTITY	postbuild	required	firmware_contains	firmware	Metadata identity requestedGid=	firmware includes actual metadata GID evidence
+FW_METADATA_TERRITORY	postbuild	required	firmware_contains	firmware	Metadata territory country=	firmware includes country/catalogue rule evidence
+FW_METADATA_ALTERNATIVES	postbuild	required	firmware_contains	firmware	Metadata alternatives seen=	firmware includes bounded alternative counts
+FW_METADATA_KEY_PAIR	postbuild	required	firmware_contains	firmware	AudioKey target source=queue-primary gid=	firmware includes last normal candidate tuple evidence
+R16_PROBE_H	prebuild	required	file_exists	spotify/SpotifyAudioKeyProbe.h	present	manual bounded diagnostic state machine interface exists
+R16_PROBE_CPP	prebuild	required	file_exists	spotify/SpotifyAudioKeyProbe.cpp	present	diagnostic state machine has no key storage or socket code
+R16_PROBE_ADAPTER	prebuild	required	file_exists	spotify/SpotifySessionKeyProbe.cpp	present	AP-only sender integration and response quarantine adapter exists
+R16_PROBE_NATIVE	prebuild	required	python_script	tests/test_dev2n_r16_key_probe_native.py	exit=0	actual C++ experiment engine and frozen wire builder pass behavioral tests
+R16_ADAPTER_NATIVE	prebuild	required	python_script	tests/test_dev2n_r16_adapter_native.py	exit=0	actual AP adapter and HTTP/JSON helpers execute with host stubs
+R16_PROBE_FREEZE	prebuild	required	python_script	tests/test_dev2n_r16_probe_contract.py	exit=0	r15 normal paths retained and diagnostic endpoint/limits/routing/fence verified
+R16_PROBE_DOC	prebuild	required	file_exists	docs/DEV2N_R16_MANUAL_AUDIOKEY_PROBE.md	present	manual experiment scope limits interpretation and procedure documented
+R17_CONT_RING_H	prebuild	required	file_exists	decoder/SpotifyApContinuousRing.h	present	64 KiB PSRAM-preferred continuous encrypted ring interface exists
+R17_CONT_RING_CPP	prebuild	required	file_exists	decoder/SpotifyApContinuousRing.cpp	present	64 KiB PSRAM-preferred continuous encrypted ring implementation exists
+R17_CONT_RING_NATIVE	prebuild	required	python_script	tests/test_dev2n_r17_continuous_ring_native.py	exit=0	actual continuous ring passes order/wrap/backpressure behavioral tests
+R17_CONT_CONTRACT	prebuild	required	python_script	tests/test_dev2n_r17_continuous_contract.py	exit=0	r16 key/audit and normal key/canary blocks remain frozen while 64 KiB diagnostic transport stays decrypt-closed
+R17_CONT_DOC	prebuild	required	file_exists	docs/DEV2N_R17_CONTINUOUS_AP_STREAM.md	present	r17 scope limits telemetry and hardware procedure documented
+R17_CONT_VERIFY_DOC	prebuild	required	file_exists	docs/DEV2N_R17_VERIFICATION.md	present	r17 host verification and target-build limits documented
+FW_KEY_PROBE_ENDPOINT	postbuild	required	firmware_contains	firmware	/spotify-key-probe	firmware contains manual AudioKey diagnostic page
+FW_KEY_PROBE_STATUS	postbuild	required	firmware_contains	firmware	AudioKey probe state=	firmware contains separate experiment counters
+FW_KEY_PROBE_POLICY	postbuild	required	firmware_contains	firmware	AudioKey probePolicy mode=manual maxTargets=	firmware contains manual limits and normal-state separation
+FW_KEY_PROBE_TARGET	postbuild	required	firmware_contains	firmware	AudioKey probeTarget index=	firmware contains per-tuple result evidence
+FW_AP_CONTINUOUS	postbuild	required	firmware_contains	firmware	AP Continuous state=	firmware contains r17 continuous encrypted transport state
+FW_AP_CONT_RING	postbuild	required	firmware_contains	firmware	AP Continuous ring storage=	firmware contains bounded ring telemetry
+FW_AP_CONT_INTEGRITY	postbuild	required	firmware_contains	firmware	AP Continuous integrity producerHash=0x	firmware contains producer/diagnostic-consumer integrity telemetry
+FW_AP_CONT_FENCE	postbuild	required	firmware_contains	firmware	consumer=diagnostic decrypt=closed	firmware preserves live decrypt/decoder fence in r17

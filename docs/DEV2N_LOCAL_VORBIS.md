@@ -1,8 +1,19 @@
-# dev.2n-r7 - Local Ogg/Vorbis decoder qualification
+# dev.2n - local media qualification history
+
+Current build: **dev.2n-r17**, bounded 64 KiB continuous encrypted AP transport
+above the frozen r16 AudioKey comparison. See
+[DEV2N_R17_CONTINUOUS_AP_STREAM.md](DEV2N_R17_CONTINUOUS_AP_STREAM.md).
+The qualified AES/Vorbis/audio files remain unchanged; r17 adds only the separate
+`SpotifyApContinuousRing` encrypted-byte diagnostic adapter. The following sections
+preserve local-media qualification history. No live Spotify key reaches the decoder.
+
+# Historical r14 - identity telemetry above the local media baseline
 
 ## Purpose
 
-`dev.2n-r7` separates codec engineering from the unresolved Spotify AudioKey service response. It decodes a known local, non-encrypted Ogg/Vorbis fixture and feeds the already-qualified Waveshare PCM ingress. No Spotify media bytes or AES material enter this path.
+`dev.2n-r14` keeps codec/streaming/crypto engineering separated from the unresolved Spotify AudioKey service response and adds measurement-only AP/ProductInfo identity telemetry. The contiguous local fixture path qualified on hardware in r7, the 4096-byte plaintext chunked path in r8, and the AES-128-CTR -> Vorbis path in r10. No real Spotify AudioKey or captured media content enters the local decoder tests.
+
+r11 factored the chunk producer behind `SpotifyMediaChunkSource`. r12 added `SpotifyApMediaChunkSource`, a bounded transient implementation that retains only the three qualified encrypted AP canary ranges while the live decrypt/decoder consumer remains hard-closed. r13 now exercises that live source through `next()` and `rewindRead()` as a diagnostic-only consumer, comparing its byte/chunk shape and FNV identity with the independent AP source gate. The local plaintext/encrypted fixtures continue to use the same producer contract without changing AES, staging, Vorbis or PCM code.
 
 ## Frozen prerequisites
 
@@ -10,9 +21,9 @@ The hardware-qualified r14 baseline remains unchanged: AP/Shannon/Mercury/SPIRC,
 
 ## Decoder choice
 
-The first target is `esphome/micro-vorbis` v0.1.0. It is a fixed-point Tremor-based streaming Ogg/Vorbis decoder with an arena allocator, PSRAM-aware memory placement and a simple byte-in / interleaved signed-16-bit PCM-out interface. The dependency is declared in `library.json`; its source is not vendored in this repository. Because the usermod is linked into WLED with `symlink://`, r2 required the owning WLED environment to list `esphome/micro-vorbis@^0.1.0` explicitly in `lib_deps`. The real r2 compile still failed at the same include under WLED/Arduino. r3 therefore also sets `lib_compat_mode = off` on **only** `[env:waveshare_spotify]`, disabling PlatformIO's framework compatibility filter for this experimental target while leaving `framework = arduino` unchanged (see `platformio_override.example.ini`).
+The qualified decoder target is `esphome/micro-vorbis` v0.1.0. It is a fixed-point Tremor-based streaming Ogg/Vorbis decoder with an arena allocator, PSRAM-aware memory placement and a simple byte-in / interleaved signed-16-bit PCM-out interface. The dependency is declared in `library.json`; its source is not vendored in this repository. Because the usermod is linked into WLED with `symlink://`, r2 required the owning WLED environment to list `esphome/micro-vorbis@^0.1.0` explicitly in `lib_deps`. The real r2 compile still failed at the same include under WLED/Arduino. r3 therefore also sets `lib_compat_mode = off` on **only** `[env:waveshare_spotify]`, disabling PlatformIO's framework compatibility filter for this experimental target while leaving `framework = arduino` unchanged (see `platformio_override.example.ini`).
 
-This is a **candidate until the actual WLED PlatformIO target compile passes**. The upstream PlatformIO example is ESP-IDF-based, while this usermod is built under WLED's Arduino environment on an ESP-IDF 5.x core. Host contract tests cannot substitute for that compile gate.
+The WLED/Arduino target compile and final link passed in r6 after the private-include and bundled micro-ogg source bridges were added. r7 then qualified the actual decoder on hardware. Each later revision still requires its own target compile because host contract tests cannot substitute for the target toolchain.
 
 ## r1/r2 target-compile results and r3 correction
 
@@ -46,6 +57,12 @@ The fixture is intentionally small and deterministic. It is not Spotify content 
 ```text
 embedded Ogg/Vorbis fixture
         |
+        +-- contiguous reference (r7)
+        |
+        +-- r8 transport adapter: 4096 + 4096 + 2245 byte deliveries
+                |
+                +-- bounded 8192-byte staging / tail preservation
+        |
         v
 SpotifyVorbisFixturePlayer task (un-pinned, stack 12288)
         |
@@ -66,10 +83,16 @@ The decode output buffer is 16 KiB and prefers PSRAM. Decoder state placement is
 
 ## Manual test
 
-Start the one-shot fixture:
+Start the hardware-qualified contiguous reference fixture:
 
 ```text
 GET /spotify-test?action=start-vorbis
+```
+
+Start the r8 StreamChunk-shaped incremental-input fixture:
+
+```text
+GET /spotify-test?action=start-vorbis-chunked
 ```
 
 Stop any active fixture/test producer:
@@ -84,21 +107,22 @@ The start command stops the existing synthetic PCM/tone producers and flushes th
 
 1. Target compile succeeds without changing the frozen WLED framework globally.
 2. No reboot, watchdog, stack canary or heap allocation failure.
-3. Audible one-shot fixture from the Waveshare speaker path.
-4. `vorbisFixture ... state=complete complete=1 errors=0`.
-5. `vorbis PCM 44100Hz ch=2 input=10437/10437`.
-6. PCM frame count is approximately 88200 frames for the 2 s fixture.
-7. `feedFail=0` and `feedCalls>0`.
-8. `stackMin>0`, output buffer 16384 bytes, memory counters populated.
-9. Existing sink telemetry remains `err=0 short=0 late=0 ringUnderrun=0`.
-10. After fixture playback, a normal Spotify transfer and direct row selection still pass the r14 control-plane/media-transport gate.
+3. `start-vorbis-chunked` produces the same clean ~2 s audible fixture as the qualified contiguous reference.
+4. Completion is `complete-chunked-input-exhausted` or `complete-chunked-eos`, with `complete=1 errors=0`.
+5. `vorbis PCM 44100Hz ch=2 input=10437/10437 frames=88200 expected=88200`.
+6. `vorbis stream mode=chunked chunk=4096 chunks=3 supplied=10437`.
+7. The staging buffer remains bounded (`stageHigh<=8192`) and exactly two refills follow the initial delivery.
+8. `feedFail=0` and `feedCalls>0`.
+9. `stackMin>0`, output buffer 16384 bytes, memory counters populated.
+10. Existing sink telemetry remains free of `err`, `short` and `late`; end-of-one-shot ring underruns are classified separately from decoder/feed failure.
+11. After fixture playback, a normal Spotify transfer/direct row selection still passes the r14 control-plane/media-transport gate.
 
-Input exhaustion without a decoder `END_OF_STREAM` is a failure (`missing-end-of-stream`), even if PCM was produced.
+As qualified in r7, explicit decoder EOS is not mandatory after the final successful call. Input exhaustion is accepted only when the complete known fixture has been consumed, the expected PCM format is established and exactly 88,200 frames are produced.
 
 ## What this build does not do
 
 - no Spotify AES decrypt;
-- no AP StreamChunk -> decoder coupling;
+- no live AP StreamChunk -> decoder coupling; the r8 adapter only reproduces its 4096-byte delivery shape with local fixture bytes;
 - no whole-track buffering;
 - no CDN/spclient/Dealer/TLS work;
 - no change to RequestKey or session identity;
@@ -106,7 +130,31 @@ Input exhaustion without a decoder `END_OF_STREAM` is a failure (`missing-end-of
 
 ## Next gate after PASS
 
-Introduce a bounded streaming producer abstraction and replay the same local fixture through chunked input before attaching any Spotify media source. AES integration remains deferred until a valid 16-byte media key is obtained from a legitimate session path.
+If r8 passes, the decoder-side incremental transport contract is qualified. The next safe engineering step is to factor the staging adapter behind a producer interface that can later accept real AP StreamChunk bytes, while keeping AES integration closed until a valid 16-byte media key is obtained from a legitimate session path. The encrypted Spotify bytes must not be sent to Vorbis before the decrypt stage exists.
+
+## dev.2n-r9 AES-CTR gate
+
+Current librespot's legacy audio decryptor uses AES-128-CTR with a fixed 16-byte IV (`72 e0 67 fb dd cb cf 77 eb e8 bc 64 3f 63 0d 93`) and a 16-byte AudioKey. r9 mirrors that byte-stream contract with `decoder/SpotifyAudioAesCtr.*`, implemented on the ESP32 with the already-linkable mbedTLS AES primitive.
+
+For qualification, `decoder/SpotifyVorbisEncryptedFixture.h` contains the same 10,437-byte synthetic Ogg fixture encrypted offline with a synthetic public key. The source is delivered as 4096 + 4096 + 2245 encrypted bytes. CTR state is continuous across all three deliveries; plaintext is written directly into the existing 8192-byte staging buffer and then decoded by the unchanged micro-vorbis path.
+
+Manual gate:
+
+```text
+GET /spotify-test?action=start-vorbis-aes-chunked
+```
+
+PASS requires clean audio and:
+
+```text
+state=complete-aes-chunked-input-exhausted (or complete-aes-chunked-eos)
+complete=1 errors=0
+input=10437/10437 frames=88200 expected=88200 feedFail=0
+mode=aes-chunked chunk=4096 chunks=3 supplied=10437 refills=2
+crypto mode=aes128-ctr keyBytes=16 fixedIv=yes decryptCalls=3 decryptBytes=10437
+```
+
+This does **not** solve the server-side `AesKeyError 0:1`; it removes local AES-CTR implementation risk from the future integration. Live encrypted AP StreamChunk bytes remain fenced from the Vorbis decoder until a legitimate 16-byte key is available.
 
 ## r4 correction after real r3 target compile
 
@@ -138,3 +186,82 @@ The r6 firmware compiled/linked and the Waveshare produced a clean audible local
 The upstream micro-vorbis basic usage loop is bounded by `input_len > 0` and naturally exits when the caller buffer is exhausted; EOS is handled if returned but is not a mandatory extra call after input exhaustion. r7 aligns the fixed-fixture adapter with that contract while remaining strict: input exhaustion is accepted only if all fixture bytes were consumed, the expected 44.1 kHz stereo format was established, and the exact fixture frame count (88,200) was produced. The explicit EOS path is retained and separately telemetered as `eos`; validated input-exhaustion completion is telemetered as `eof`.
 
 The r6 audio snapshot also showed `PCM ingress inFrames=176400` and `flushes=2` versus 88,200 frames in the per-run Vorbis telemetry. Since audio-sink counters are cumulative while fixture telemetry was reset on every start, this is strong evidence that the start endpoint ran twice in that boot. r7 therefore preserves the fixture `starts` counter cumulatively to expose duplicate invocations.
+
+
+## r8 chunked-input design after r7 hardware qualification
+
+r7 hardware telemetry closed the contiguous decoder gate: `state=complete-input-exhausted`, `starts=1 complete=1 errors=0`, `input=10437/10437`, `frames=88200 expected=88200`, `feedCalls=87 feedFail=0`, and decoder-task `stackMin=10116`. The sink independently reported 88,200 44.1 kHz ingress frames becoming 44,100 22.05 kHz output frames, confirming the frozen 2:1 conversion and exact two-second duration.
+
+r8 deliberately changes only the caller-side input shape. The checked-in fixture is 10,437 bytes and is delivered as 4096, 4096 and 2245 bytes. Its Ogg page layout is 58, 3902, 3249 and 3228 bytes; the third and fourth pages cross 4096-byte source boundaries. The 8192-byte staging buffer therefore retains an unconsumed page tail across a refill and presents the decoder with contiguous bytes only after the next delivery arrives. No whole-track buffer or live Spotify media source is introduced.
+
+## r10 hardware qualification
+
+Hardware on 2026-10-07 closed the local encrypted-media gate. `start-vorbis-aes-chunked` produced clean audible output and reported `complete-aes-chunked-input-exhausted`, `complete=1`, `errors=0`, three 4096-shaped encrypted deliveries totaling 10,437 bytes, `decryptCalls=3`, `decryptBytes=10437`, exactly 88,200 decoded 44.1 kHz stereo frames and zero PCM feed failures. AES cost remained small (`decryptMax=1361us`) relative to Vorbis decode (`decodeMax=21046us`); decoder task stack reserve remained >10 KiB.
+
+This qualifies the local post-key path as:
+
+```text
+encrypted chunk source -> AES-128-CTR -> bounded plaintext staging -> Ogg/Vorbis -> PCM -> Waveshare sink
+```
+
+It does not alter the server-side `AesKeyError 0:1` result.
+
+## r11 producer abstraction and live pre-decrypt source gate
+
+`decoder/SpotifyMediaChunkSource.h` defines a minimal bounded producer API: reset, next chunk, EOF, total/supplied byte counters and source name. The checked-in fixture uses `SpotifyMemoryChunkSource`; the player owns the staging buffer and optional AES state exactly as before. The qualified r8/r10 chunk semantics therefore no longer depend on direct fixture indexing inside the decoder loop.
+
+The live AP path is intentionally **not** wired into the decoder. While the existing three StreamChunk probes run, r11 updates a rolling FNV-1a hash over the encrypted data bytes, counts bytes, and records whether each completed channel delivered exactly 4096 bytes. No AP media body is copied into persistent storage or exposed through `/json/info`.
+
+Expected source-gate telemetry after a normal Spotify track probe:
+
+```text
+AP Stream sourceGate chunks=3/3 mismatch=0 bytes=12288 hash=0x... ready=yes storage=none
+```
+
+`ready=yes` qualifies only the producer *shape*. A future live decoder path still requires a legitimate 16-byte AudioKey before any AP media can cross the pre-decrypt fence.
+
+
+## r12 transient live AP source / hard key gate
+
+Hardware r11 qualification on 2026-10-07 confirmed both sides of the producer boundary independently. The local encrypted fixture remained clean with `source=fixture-encrypted contract=MediaChunkSource`, `decryptCalls=3`, `decryptBytes=10437`, `frames=88200`, and `feedFail=0`. A real Spotify track then produced `AP Stream attempts=3 ok=3`, `sourceGate chunks=3/3 mismatch=0 bytes=12288 ready=yes`, and `macFail=0` while the account again returned `AesKeyError 0:1`.
+
+r12 therefore adds a concrete live implementation without opening DRM consumption. `SpotifyApMediaChunkSource` has a fixed capacity of 12,288 bytes (3 x 4096), accepts packet fragments from the AP task, commits only exact 4096-byte canary channels, and implements the same `reset/next/eof/totalBytes/suppliedBytes/chunksSupplied/name` contract as the local source. Allocation is lazy, PSRAM is preferred, internal heap is the fallback, and the buffer is wiped on reset/invalidation/track-session boundaries.
+
+The old rolling FNV-1a source gate remains independent, so transport-shape qualification does not depend on the new capture buffer. `/json/info` adds only non-sensitive source state:
+
+```text
+AP Stream sourceGate chunks=3/3 mismatch=0 bytes=12288 hash=0x... ready=yes telemetryStorage=none
+AP Stream liveSource source=ap-encrypted-canary contract=MediaChunkSource ready=yes valid=yes retained=12288/12288 chunks=3 fragments=<n> failures=0 storage=<psram|internal> consumer=closed keyGate=blocked
+```
+
+No media bytes are serialized. `keyGate=eligible` is derived only from the existing authenticated RequestKey success state (`audioKeyBytes==16`); r12 still does not pass that key or the live source to the AES/Vorbis player. The invariant for this gate is therefore:
+
+```text
+live AP source may be buffered encrypted -> consumer remains closed
+```
+
+This is deliberately the final integration step before a future authorized live decrypt coupling.
+
+
+## r13 diagnostic live-source consumer verification
+
+Hardware r12 on 2026-10-07 qualified transient capture of the real encrypted AP canary: `sourceGate chunks=3/3 mismatch=0 bytes=12288 ready=yes`, `liveSource ready=yes valid=yes retained=12288/12288 chunks=3 fragments=3 failures=0 storage=psram`, while `AudioKey keyBytes=0 err=0:1`, `consumer=closed` and `keyGate=blocked`. Shannon remained `macFail=0`.
+
+r13 does not alter StreamChunk, RequestKey, AES, Vorbis or PCM. After the third 4096-byte range is sealed it reads the live source only through `SpotifyMediaChunkSource::next()` using a 512-byte bounded scratch buffer. Expected shape is 24 reads, 12,288 bytes and 3 logical chunk completions. A rolling FNV-1a digest must equal the independently accumulated AP `sourceGate` digest. The read cursor is then rewound without wiping or changing the sealed encrypted buffer.
+
+Expected telemetry:
+
+```text
+AP Stream liveVerify attempts=1 ok=1 fail=0 calls=24 chunks=3 bytes=12288 hash=0x... hashMatch=yes eof=yes rewind=yes decrypt=closed
+```
+
+The hard boundary remains unchanged: no live AP bytes are passed to `SpotifyAudioAesCtr` or `SpotifyVorbisFixturePlayer`, no key material is exported to this verifier, and no raw media bytes are exposed in `/json/info`.
+
+
+## r14 AudioKey identity audit telemetry
+
+Hardware r13 qualified the live source consumer: 24 bounded `next()` reads reproduced exactly 12,288 bytes / 3 chunks and the independent AP FNV digest, reached EOF and rewound while `decrypt=closed`. r14 therefore makes no media-path changes.
+
+r14 exposes the already-sent AP identity classifications and selected non-secret ProductInfo capability tags needed for comparison with current desktop librespot. The ClientHello/auth values and the 42-byte RequestKey layout are unchanged. The new telemetry is diagnostic only and never exports credentials, access tokens, AES key bytes, raw ProductInfo XML or media.
+
+The live AES/Vorbis consumer remains closed regardless of telemetry outcome. Any future identity change requires a separate build and a specific comparative hypothesis.

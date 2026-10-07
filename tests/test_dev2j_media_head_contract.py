@@ -7,9 +7,9 @@ h = (root / "spotify/SpotifySessionProbe.h").read_text()
 ui = (root / "usermod_spotify_connect.h").read_text()
 lib = (root / "library.json").read_text()
 
-assert '"version": "0.1.0-dev.2n-vorbis-r7"' in lib
+assert '"version": "0.1.0-dev.2n-vorbis-r17"' in lib
 assert 'USERMOD_VERSION = "0.1.0-dev.2n-vorbis"' in ui
-assert 'USERMOD_REVISION = "r7"' in ui
+assert 'USERMOD_REVISION = "r17"' in ui
 
 # ProductInfo is retained from dev.2j on the AP live channel. Its tolerant bounded
 # scalar XML tag scanner and exports only selected non-sensitive attributes.
@@ -54,5 +54,5 @@ assert "MediaHead lastError=" in ui
 assert "unsupportedScheme=" in ui
 assert "audioKeyHex" not in ui
 assert "expanded head-files-url" not in ui
-assert "scope=Spotify network remains frozen at encrypted StreamChunk; independent local Ogg/Vorbis -> PCM gate enabled; AES integration remains closed" in ui
+assert "scope=live AP encrypted canary retained transiently behind MediaChunkSource; hard key gate + live decrypt/decoder consumer remain closed" in ui
 print("dev.2j retained ProductInfo/media-head contract: PASS")

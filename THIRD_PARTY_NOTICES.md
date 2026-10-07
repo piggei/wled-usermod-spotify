@@ -129,3 +129,13 @@ Upstream reference: `https://github.com/esphome-libs/micro-vorbis`.
 `micro-vorbis` also ships the `micro-ogg-demuxer` subproject used by its Ogg wrapper. That demuxer is Apache-2.0 licensed upstream. dev.2n-r6 only instructs PlatformIO to compile the copy already bundled inside the resolved micro-vorbis dependency (`lib/micro-ogg-demuxer/src`); it does not vendor another copy into this repository. Preserve the bundled micro-ogg-demuxer license when redistributing resolved dependency sources/binaries as required by its license.
 
 Upstream demuxer reference: `https://github.com/esphome-libs/micro-ogg-demuxer`.
+
+
+## Metadata identity/restriction audit (dev.2n-r15)
+
+`spotify/SpotifyMetadataAudit.*` is an independent diagnostic implementation of
+field facts cross-checked against the public librespot `metadata.proto` schema.
+Published librespot catalogue/country handling and cspot/go-librespot alternative
+selection informed the comparison, but no implementation source from these
+projects is copied, linked or vendored. See `docs/DEV2N_R15_METADATA_AUDIT.md` for
+references and the deliberately conservative, non-authorizing parser semantics.

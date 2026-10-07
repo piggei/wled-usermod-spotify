@@ -1,6 +1,6 @@
 {
   "name": "wled-usermod-spotify",
-  "version": "0.1.0-dev.2n-vorbis-r7",
+  "version": "0.1.0-dev.2n-vorbis-r17",
   "description": "Spotify Connect receiver + local Ogg/Vorbis decoder qualification usermod for WLED on Waveshare ESP32-S3 RGB Matrix",
   "keywords": [
     "wled",

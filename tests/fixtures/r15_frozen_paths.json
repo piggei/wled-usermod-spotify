@@ -1,0 +1,30 @@
+{
+  "baseline": "0.1.0-dev.2n-vorbis-r15",
+  "archive_sha256": "04ea40739314bc695fb59e301b8cfde3ef9397f6f3750cf20f6588d5bee481ab",
+  "files": {
+    "spotify/SpotifyMetadataAudit.cpp": "83515a76db830901df44fd4745acd86d557aa8019ca511d91df122ab3fb6735c",
+    "spotify/SpotifyMetadataAudit.h": "8259bba4b5d0292a5a5e124a47b4fecb79b87e7551c126c3da98599542a1c458"
+  },
+  "blocks": {
+    "normal_key_sender": {
+      "start": "  auto sendAudioKeyCandidate =",
+      "end": "  auto advanceAudioKeyCandidate =",
+      "sha256": "c48cf1fe14f9010cadd6a6776ec96f83c5a2994aef10a0b32bdf05774b1176e6"
+    },
+    "normal_track_request": {
+      "start": "  auto sendTrackMetadataRequest =",
+      "end": "  auto sendAudioKeyCandidate =",
+      "sha256": "8bb8c98ff58931e0aad44135bfa34699527a2e1a64e9bde54a94fa38d1eee8b3"
+    },
+    "normal_idle_timeouts": {
+      "start": "    if (tcp.available() <= 0) {\n      if (audioKeyPending_",
+      "end": "    std::vector<uint8_t> payload;\n    bool liveMacOk",
+      "sha256": "faf61707cf346c61be0a4bf9df58c2eb875b8a479707a9cd06f69132dbcb4184"
+    },
+    "normal_stream_receiver": {
+      "start": "    if (liveCommand == STREAM_CHUNK_SUCCESS_COMMAND ||",
+      "end": "    if (liveCommand == AES_KEY_COMMAND || liveCommand == AES_KEY_ERROR_COMMAND)",
+      "sha256": "fea58f7ef8f114134f0f7b2f3f54dc4a5607146627ae7b294230e2fed28cd51a"
+    }
+  }
+}

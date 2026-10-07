@@ -1,42 +1,40 @@
-# Continuation plan after the qualified r14 baseline
+# Continuation after dev.2n-r17
 
-## Qualified state entering dev.2n
+## Current gate: 64 KiB encrypted transport
 
-The network/control path is sufficiently characterized and should remain frozen while decoder work proceeds:
+r16 hardware sent six concrete primary/alternative AudioKey probes and all were
+explicitly rejected `0:1`. A fresh upstream librespot `dev` build on Windows, same
+Premium account/country/AP, independently requested the same primary GID/file pairs
+and also received `0:1`; additional automatically advanced tracks failed the same
+way. Current go-librespot master exposes a PlayPlay interface but its public plugin
+remains unsupported/stubbed, so no public compatible license provider is available
+to integrate here.
 
-- dev.2i: RequestKey is mechanically correlated but the current Premium account returns `0x0e / 0:1` for all AudioFile candidates; the same class of error was independently reproduced with librespot 0.8.0;
-- dev.2l: encrypted media bytes are reachable through AP StreamChunk; three sequential 4 KiB ranges are qualified;
-- dev.2m-r12: direct playlist taps are hardware-qualified through `skip_to.track_uid -> URI -> canonical GID-only TrackRef`;
-- r13: local resolved Load-to-Notify work measures only about 45-47 ms;
-- r14: the 50 ms AP receive poll is hardware-qualified with no Shannon, StreamChunk, WLED FPS or audio-sink regression.
+r17 therefore freezes RequestKey and advances only sustained encrypted transport:
+16 x 4096-byte sequential AP ranges through a bounded PSRAM-preferred ring and an
+independent hash-only consumer. Live AES/Vorbis remains disconnected.
 
-Do not change shared-I2S/ES8311/DMA/PCM, LoginBlob, AP/Shannon, Mercury/SPIRC, metadata, RequestKey wire/correlation, direct-selection mapping, AP StreamChunk or the r14 poll without new evidence.
+## Decision after r17 hardware
 
-## Active gate: dev.2n-r7 local Ogg/Vorbis
+If the 64 KiB pass is clean on at least two tracks, treat AP encrypted-byte transport
+as qualified for the next media-plumbing step. Do not reopen AudioKey without new
+external evidence (upstream fix, legitimate compatible licensing path, or a known
+working independent client on this same account).
 
-`dev.2n-r7` starts from the now-proven r6 target integration: WLED/Arduino compiles and links micro-vorbis plus the bundled micro-ogg demuxer, and real hardware produced clean decoded audio. r7 changes only fixture completion bookkeeping: full caller-input exhaustion is accepted when the complete known fixture, valid format and exact 88,200-frame oracle all agree; explicit EOS remains separately telemetered. It still feeds only `WavesharePcmOutput::enqueuePcm44100()`. See `DEV2N_LOCAL_VORBIS.md`.
+The next safe engineering work after a clean r17 is transport lifecycle rather than
+DRM: real file-length termination, cancellation/seek behavior, longer sustained
+windows and producer/consumer scheduling. A live decrypt/decoder join remains gated
+on a legitimately returned usable key.
 
-Required order:
+## Qualified components that remain frozen
 
-1. re-run one-shot local fixture on r7 and confirm `complete=1 errors=0`, exact 88,200 frames and the new `eos/eof` classification;
-2. confirm a single invocation reports `starts=1` (r6 evidence suggests the test URL may have been invoked twice in that boot);
-3. regress the r14 Spotify path after fixture playback;
-4. only after PASS, convert the local decoder producer to bounded chunked/streaming input using the same fixture.
+- dev.2m-r14: canonical GID-only queue selection and 50 ms AP receive poll.
+- dev.2n-r7/r8/r10: local contiguous/chunked/AES-CTR fixture to PCM and ES8311.
+- dev.2n-r11/r12/r13: producer contract, retained 12 KiB AP canary and read/hash/rewind.
+- dev.2n-r14/r15/r16: identity audit, metadata restrictions/alternatives and bounded manual key comparison.
+- legacy RequestKey serialization and normal AudioKey latch remain frozen after the independent librespot reproduction.
 
-## Parallel AudioKey investigation
+## Deferred
 
-Keep AudioKey as a separate evidence-gathering track. The second non-Premium account is not usable as a RequestKey A/B control because Spotify blocks WLED selection before transfer. Compare the current AP/session identity against a current desktop client before changing any identity field or RequestKey bytes. See `AUDIOKEY_IDENTITY_AUDIT.md`.
-
-## Deferred join
-
-Only when a legitimate session supplies a valid media key should the pipeline be joined:
-
-```text
-AP StreamChunk encrypted bytes
-        -> AES decrypt
-        -> bounded Ogg/Vorbis stream decoder
-        -> 44.1 kHz signed 16-bit stereo PCM
-        -> WavesharePcmOutput::enqueuePcm44100()
-```
-
-No alternate key derivation, entitlement bypass or Alexa impersonation is part of the design.
+No PlayPlay deobfuscator, identity impersonation, entitlement bypass, live Spotify
+AES decrypt or decoder feed is introduced in r17.

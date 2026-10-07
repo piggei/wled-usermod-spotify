@@ -17,14 +17,14 @@ for marker in required:
     assert marker in s or marker in h, marker
 
 assert 'USERMOD_VERSION = "0.1.0-dev.2n-vorbis"' in u
-assert 'USERMOD_REVISION = "r7"' in u
+assert 'USERMOD_REVISION = "r17"' in u
 assert "static const char* HEX" not in s
 assert "kHexDigits" in s
 assert "Spotify media-key hardening" in u
 assert "Metadata GET attempts=" in u
 assert "TrackRef index=" in u
 assert "Track title=" in u and "Track album=" in u and "Track audioFiles=" in u
-assert "scope=Spotify network remains frozen at encrypted StreamChunk; independent local Ogg/Vorbis -> PCM gate enabled; AES integration remains closed" in u
+assert "scope=live AP encrypted canary retained transiently behind MediaChunkSource; hard key gate + live decrypt/decoder consumer remain closed" in u
 
 # TrackRef is the public SPIRC State.track field 27, with gid field 1 and uri field 2.
 assert "field == 27u" in s
